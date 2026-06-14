@@ -15,25 +15,17 @@ public class TerrainMistileBehaviour : MonoBehaviour
     private const float TerrainImpactDistance = 1.25f;
     private const float TerrainImpactHeight = 0.85f;
     private const float TerrainTargetGroundOffset = 0.15f;
-    private const float StuckDetonationTime = 3f;
-    private const float StuckSpeedThreshold = 0.1f;
-    private const float StuckTerrainValidationInterval = 0.5f;
     private const float VisualSyncRetryInterval = 0.25f;
 
     private Character _character = null!;
     private MonsterAI _monsterAI = null!;
     private ZNetView _nview = null!;
     private Vector3 _terrainTarget;
-    private Vector3 _lastStuckCheckPosition;
     private float _resetRadius = 8f;
     private bool _hasTerrainTarget;
     private bool _selfDestructTriggered;
     private bool _terrainResetDone;
-    private bool _hasLastStuckCheckPosition;
-    private bool _stuckTerrainStillModified;
     private bool _visualColorApplied;
-    private float _stuckTime;
-    private float _nextStuckTerrainValidationTime;
     private float _nextVisualSyncTime;
 
     private void Awake()
@@ -45,6 +37,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
         TryApplySyncedVisualColor();
         ApplyIdentity();
         ConfigureTerrainSeeker();
+        TerrainMistilePrefab.MakeCollidersNonBlocking(gameObject);
         TerrainMistileSystem.RegisterActiveTerrainMistile(this);
 
         if (_character)
@@ -226,7 +219,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
         _terrainTarget = terrainOperationPoint;
         _resetRadius = Mathf.Max(0.1f, resetRadius);
         _hasTerrainTarget = true;
-        ResetStuckTracking();
         TerrainMistileSystem.ReserveTerrainTarget(_terrainTarget, _resetRadius);
         ApplyVisualColorForTarget(_terrainTarget);
 
@@ -250,7 +242,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
             _terrainTarget = terrainTarget;
             _resetRadius = resetRadius;
             _hasTerrainTarget = true;
-            ResetStuckTracking();
             TerrainMistileSystem.ReserveTerrainTarget(_terrainTarget, _resetRadius);
         }
 
@@ -318,11 +309,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        if (TryDetonateWhenStuck(currentPosition))
-        {
-            return;
-        }
-
         Vector3 moveDirection = toTarget.normalized;
         _character.SetRun(true);
         _character.SetMoveDir(moveDirection);
@@ -332,65 +318,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
         {
             _character.SetLookDir(lookDirection.normalized);
         }
-    }
-
-    private bool TryDetonateWhenStuck(Vector3 currentPosition)
-    {
-        if (!_hasTerrainTarget)
-        {
-            ResetStuckTracking();
-            return false;
-        }
-
-        if (Time.time >= _nextStuckTerrainValidationTime)
-        {
-            _nextStuckTerrainValidationTime = Time.time + StuckTerrainValidationInterval;
-            _stuckTerrainStillModified = TerrainMistileSystem.HasModifiedTerrainAround(_terrainTarget, _resetRadius);
-        }
-
-        if (!_stuckTerrainStillModified)
-        {
-            ResetStuckTracking();
-            return false;
-        }
-
-        if (!_hasLastStuckCheckPosition)
-        {
-            _lastStuckCheckPosition = currentPosition;
-            _hasLastStuckCheckPosition = true;
-            return false;
-        }
-
-        float deltaTime = Time.fixedDeltaTime;
-        float speed = deltaTime > 0f ? Vector3.Distance(currentPosition, _lastStuckCheckPosition) / deltaTime : 0f;
-        _lastStuckCheckPosition = currentPosition;
-
-        if (speed <= StuckSpeedThreshold)
-        {
-            _stuckTime += deltaTime;
-        }
-        else
-        {
-            _stuckTime = 0f;
-        }
-
-        if (_stuckTime < StuckDetonationTime)
-        {
-            return false;
-        }
-
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile stuck for {_stuckTime:0.00}s at speed {speed:0.000}; detonating at terrain target {_terrainTarget}.");
-        DetonateOnTerrain();
-        return true;
-    }
-
-    private void ResetStuckTracking()
-    {
-        _lastStuckCheckPosition = transform.position;
-        _hasLastStuckCheckPosition = true;
-        _stuckTerrainStillModified = true;
-        _nextStuckTerrainValidationTime = 0f;
-        _stuckTime = 0f;
     }
 
     private void DetonateOnTerrain()

@@ -2,7 +2,7 @@
   "name": "TerrainMistile",
   "version_number": "1.0.0",
   "website_url": "",
-  "description": "Spawns TerrainMistiles when players deform terrain; their self-destruction resets player terrain deltas while preserving location terrain changes.",
+  "description": "Spawns configurable TerrainMistiles from changed terrain. They seek the edit, detonate, and reset player-made height/paint changes while preserving world/location terrain. Tune biome chance, interval, radius, health, color, and base protection.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2333",
     "ValheimModding-Jotunn-2.29.0"

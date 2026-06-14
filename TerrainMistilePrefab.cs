@@ -79,6 +79,7 @@ internal static class TerrainMistilePrefab
             prefab.AddComponent<TerrainMistileBehaviour>();
         }
 
+        MakeCollidersNonBlocking(prefab);
         ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor);
         PrefabManager.Instance.AddPrefab(prefab);
         _registeredPrefab = prefab;
@@ -111,6 +112,22 @@ internal static class TerrainMistilePrefab
         ApplyLightColor(root, color);
         ApplyParticleColor(root, color);
         ApplyMaterialColor(root, color);
+    }
+
+    internal static void MakeCollidersNonBlocking(GameObject root)
+    {
+        if (!root)
+        {
+            return;
+        }
+
+        foreach (Collider collider in root.GetComponentsInChildren<Collider>(includeInactive: true))
+        {
+            if (collider)
+            {
+                collider.isTrigger = true;
+            }
+        }
     }
 
     private static void ApplyLightColor(GameObject root, Color color)

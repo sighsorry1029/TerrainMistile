@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using BepInEx;
 using BepInEx.Logging;
 using UnityEngine;
@@ -14,10 +15,11 @@ namespace TerrainMistile;
 internal static class TerrainMistileSpawnRules
 {
     private const float DefaultInterval = 60f;
-    private const float DefaultSearchRange = 24f;
+    private const float DefaultPlayerSearchRadius = 32f;
     private const float DefaultSpawnChance = 0.25f;
     private const bool DefaultScaleSpawnsWithNearbyPlayers = true;
     private const int DefaultIgnorePlayerBaseBaseValue = 1;
+    private const float DefaultBaseCheckRadius = 24f;
     private const int DefaultMaxActiveTerrainMistilesPerArea = 3;
     private const float DefaultSpawnRadiusMin = 16f;
     private const float DefaultSpawnRadiusMax = 32f;
@@ -26,6 +28,49 @@ internal static class TerrainMistileSpawnRules
     private const float DefaultHealth = 1f;
     internal const string DefaultVisualColorHex = "#45FF5A";
     private static readonly Color FallbackVisualColor = new(0.270f, 1.000f, 0.353f, 1f);
+    private static readonly string[] DefaultPlayerBasePrefabNames =
+    {
+        "ashwood_bed",
+        "bed",
+        "blackforge",
+        "blastfurnace",
+        "BogWitch_Fire_Pit",
+        "bonfire",
+        "charcoal_kiln",
+        "charred_shieldgenerator",
+        "dverger_guardstone",
+        "eitrrefinery",
+        "fermenter",
+        "fire_pit",
+        "fire_pit_haldor",
+        "fire_pit_hildir",
+        "fire_pit_iron",
+        "forge",
+        "guard_stone",
+        "hearth",
+        "piece_artisanstation",
+        "piece_bed02",
+        "piece_brazierceiling01",
+        "piece_brazierfloor01",
+        "piece_brazierfloor02",
+        "piece_groundtorch",
+        "piece_groundtorch_blue",
+        "piece_groundtorch_green",
+        "piece_groundtorch_mist",
+        "piece_groundtorch_wood",
+        "piece_magetable",
+        "piece_oven",
+        "piece_shieldgenerator",
+        "piece_spinningwheel",
+        "piece_stonecutter",
+        "piece_walltorch",
+        "piece_workbench",
+        "portal",
+        "portal_stone",
+        "portal_wood",
+        "smelter",
+        "windmill"
+    };
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .IgnoreUnmatchedProperties()
@@ -34,15 +79,17 @@ internal static class TerrainMistileSpawnRules
 
     private static readonly Dictionary<int, TerrainMistileBiomeSpawnRule> BiomeRules = new();
     private static TerrainMistileBiomeSpawnRule _defaultRule = CreateDefaultRule();
-    private static float _maxSearchRange = DefaultSearchRange;
+    private static HashSet<string> _playerBasePrefabNames = CreateDefaultPlayerBasePrefabNames();
+    private static float _maxPlayerSearchRadius = DefaultPlayerSearchRadius;
     private static float _maxResetRadius = DefaultResetRadius;
     private static bool _hasEnabledRules = true;
     private static ManualLogSource? _logger;
 
-    internal static float MaxSearchRange => _maxSearchRange;
+    internal static float MaxPlayerSearchRadius => _maxPlayerSearchRadius;
     internal static float MaxResetRadius => _maxResetRadius;
     internal static bool HasEnabledRules => _hasEnabledRules;
     internal static Color DefaultVisualColor => _defaultRule.VisualColor;
+    internal static bool IsPlayerBasePrefabName(string prefabName) => _playerBasePrefabNames.Contains(prefabName);
 
     internal static void Initialize(ManualLogSource logger)
     {
@@ -67,13 +114,19 @@ internal static class TerrainMistileSpawnRules
 
     internal static bool LoadYamlText(string yaml, string source)
     {
-        if (!TryParseYaml(yaml, out TerrainMistileBiomeSpawnRule defaultRule, out Dictionary<int, TerrainMistileBiomeSpawnRule> parsedRules, out string error))
+        if (!TryParseYaml(
+                yaml,
+                out TerrainMistileBiomeSpawnRule defaultRule,
+                out Dictionary<int, TerrainMistileBiomeSpawnRule> parsedRules,
+                out HashSet<string> playerBasePrefabNames,
+                out string error))
         {
             _logger?.LogError($"Failed to parse TerrainMistile spawn rules from {source}: {error}");
             return false;
         }
 
         _defaultRule = defaultRule;
+        _playerBasePrefabNames = playerBasePrefabNames;
         BiomeRules.Clear();
         foreach (KeyValuePair<int, TerrainMistileBiomeSpawnRule> entry in parsedRules)
         {
@@ -81,7 +134,7 @@ internal static class TerrainMistileSpawnRules
         }
 
         RecalculateRuntimeState();
-        _logger?.LogInfo($"Loaded TerrainMistile spawn rules from {source}. Default={_defaultRule}; overrides={BiomeRules.Count}; enabled={_hasEnabledRules}.");
+        _logger?.LogInfo($"Loaded TerrainMistile spawn rules from {source}. Default={_defaultRule}; overrides={BiomeRules.Count}; playerBasePrefabs={_playerBasePrefabNames.Count}; enabled={_hasEnabledRules}.");
         TerrainMistileSystem.ClearSpawnUnitRollState();
         TerrainMistilePrefab.RefreshRegisteredPrefabVisuals();
         return true;
@@ -118,10 +171,12 @@ internal static class TerrainMistileSpawnRules
         string yaml,
         out TerrainMistileBiomeSpawnRule defaultRule,
         out Dictionary<int, TerrainMistileBiomeSpawnRule> parsedRules,
+        out HashSet<string> playerBasePrefabNames,
         out string error)
     {
         defaultRule = CreateDefaultRule();
         parsedRules = new Dictionary<int, TerrainMistileBiomeSpawnRule>();
+        playerBasePrefabNames = CreateDefaultPlayerBasePrefabNames();
         error = "";
 
         if (string.IsNullOrWhiteSpace(yaml))
@@ -129,10 +184,10 @@ internal static class TerrainMistileSpawnRules
             return true;
         }
 
-        Dictionary<string, TerrainMistileSpawnRuleValues?>? file;
+        Dictionary<object, object?>? file;
         try
         {
-            file = Deserializer.Deserialize<Dictionary<string, TerrainMistileSpawnRuleValues?>>(yaml);
+            file = Deserializer.Deserialize<Dictionary<object, object?>>(yaml);
         }
         catch (Exception ex)
         {
@@ -146,12 +201,18 @@ internal static class TerrainMistileSpawnRules
         }
 
         TerrainMistileSpawnRuleValues? defaults = null;
-        foreach (KeyValuePair<string, TerrainMistileSpawnRuleValues?> entry in file)
+        foreach (KeyValuePair<object, object?> entry in file)
         {
-            if (entry.Key.Equals("defaults", StringComparison.OrdinalIgnoreCase))
+            string key = GetYamlKey(entry.Key);
+            if (key.Equals("defaults", StringComparison.OrdinalIgnoreCase))
             {
-                defaults = entry.Value;
-                break;
+                defaults = CreateValues(entry.Value);
+                continue;
+            }
+
+            if (key.Equals("playerBasePrefabs", StringComparison.OrdinalIgnoreCase))
+            {
+                playerBasePrefabNames = CreatePlayerBasePrefabNames(entry.Value);
             }
         }
 
@@ -160,29 +221,259 @@ internal static class TerrainMistileSpawnRules
             defaultRule = CreateRule(defaults, defaultRule);
         }
 
-        foreach (KeyValuePair<string, TerrainMistileSpawnRuleValues?> entry in file)
+        foreach (KeyValuePair<object, object?> entry in file)
         {
-            if (entry.Key.Equals("defaults", StringComparison.OrdinalIgnoreCase))
+            string key = GetYamlKey(entry.Key);
+            if (key.Equals("defaults", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("playerBasePrefabs", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            string biomeName = NormalizeBiomeName(entry.Key);
+            string biomeName = NormalizeBiomeName(key);
             if (biomeName.Length == 0 || biomeName.Equals(nameof(Heightmap.Biome.None), StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (!TryResolveBiomeKey(entry.Key, out int biome))
+            if (!TryResolveBiomeKey(key, out int biome))
             {
-                _logger?.LogWarning($"Ignoring unknown biome '{entry.Key}' in TerrainMistile spawn rules.");
+                _logger?.LogWarning($"Ignoring unknown biome '{key}' in TerrainMistile spawn rules.");
                 continue;
             }
 
-            parsedRules[biome] = CreateRule(entry.Value, defaultRule);
+            parsedRules[biome] = CreateRule(CreateValues(entry.Value), defaultRule);
         }
 
         return true;
+    }
+
+    private static string GetYamlKey(object? key)
+    {
+        return key?.ToString()?.Trim() ?? "";
+    }
+
+    private static TerrainMistileSpawnRuleValues? CreateValues(object? value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+
+        if (value is not IDictionary<object, object?> map)
+        {
+            return null;
+        }
+
+        TerrainMistileSpawnRuleValues values = new();
+        foreach (KeyValuePair<object, object?> entry in map)
+        {
+            string key = NormalizeFieldName(GetYamlKey(entry.Key));
+            switch (key)
+            {
+                case "interval":
+                    if (TryGetFloat(entry.Value, out float interval))
+                    {
+                        values.Interval = interval;
+                    }
+
+                    break;
+                case "playersearchradius":
+                    if (TryGetFloat(entry.Value, out float playerSearchRadius))
+                    {
+                        values.PlayerSearchRadius = playerSearchRadius;
+                    }
+
+                    break;
+                case "spawnchance":
+                    if (TryGetFloat(entry.Value, out float spawnChance))
+                    {
+                        values.SpawnChance = spawnChance;
+                    }
+
+                    break;
+                case "maxspawn":
+                    if (TryGetInt(entry.Value, out int maxSpawn))
+                    {
+                        values.MaxSpawn = maxSpawn;
+                    }
+
+                    break;
+                case "perplayerspawn":
+                    if (TryGetBool(entry.Value, out bool perPlayerSpawn))
+                    {
+                        values.PerPlayerSpawn = perPlayerSpawn;
+                    }
+
+                    break;
+                case "playerbasevalue":
+                    if (TryGetInt(entry.Value, out int playerBaseValue))
+                    {
+                        values.PlayerBaseValue = playerBaseValue;
+                    }
+
+                    break;
+                case "basecheckradius":
+                    if (TryGetFloat(entry.Value, out float baseCheckRadius))
+                    {
+                        values.BaseCheckRadius = baseCheckRadius;
+                    }
+
+                    break;
+                case "spawnradius":
+                    values.SpawnRadius = entry.Value?.ToString();
+                    break;
+                case "spawnaltitude":
+                    if (TryGetFloat(entry.Value, out float spawnAltitude))
+                    {
+                        values.SpawnAltitude = spawnAltitude;
+                    }
+
+                    break;
+                case "resetradius":
+                    if (TryGetFloat(entry.Value, out float resetRadius))
+                    {
+                        values.ResetRadius = resetRadius;
+                    }
+
+                    break;
+                case "health":
+                    if (TryGetFloat(entry.Value, out float health))
+                    {
+                        values.Health = health;
+                    }
+
+                    break;
+                case "visualcolor":
+                    values.VisualColor = entry.Value?.ToString();
+                    break;
+            }
+        }
+
+        return values;
+    }
+
+    private static HashSet<string> CreatePlayerBasePrefabNames(object? value)
+    {
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        if (value is string scalar)
+        {
+            AddPlayerBasePrefabNames(scalar, names);
+            return names;
+        }
+
+        if (value is IEnumerable<object?> sequence)
+        {
+            foreach (object? item in sequence)
+            {
+                AddPlayerBasePrefabNames(item?.ToString(), names);
+            }
+
+            return names;
+        }
+
+        _logger?.LogWarning("Ignoring invalid playerBasePrefabs value in TerrainMistile spawn rules. Use a YAML list or comma-separated string.");
+        return names;
+    }
+
+    private static HashSet<string> CreateDefaultPlayerBasePrefabNames()
+    {
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string prefabName in DefaultPlayerBasePrefabNames)
+        {
+            AddPlayerBasePrefabNames(prefabName, names);
+        }
+
+        return names;
+    }
+
+    private static void AddPlayerBasePrefabNames(string? value, HashSet<string> names)
+    {
+        string? normalized = value?.Trim();
+        if (normalized == null || normalized.Length == 0)
+        {
+            return;
+        }
+
+        foreach (string part in normalized.Split(','))
+        {
+            string prefabName = part.Trim();
+            if (prefabName.Length > 0)
+            {
+                names.Add(prefabName);
+            }
+        }
+    }
+
+    private static string NormalizeFieldName(string value)
+    {
+        return value.Trim().Replace(" ", "").Replace("_", "").Replace("-", "").ToLowerInvariant();
+    }
+
+    private static bool TryGetFloat(object? value, out float result)
+    {
+        switch (value)
+        {
+            case float floatValue:
+                result = floatValue;
+                return true;
+            case double doubleValue:
+                result = (float)doubleValue;
+                return true;
+            case decimal decimalValue:
+                result = (float)decimalValue;
+                return true;
+            case int intValue:
+                result = intValue;
+                return true;
+            case long longValue:
+                result = longValue;
+                return true;
+            case string stringValue:
+                return TryParseFloat(stringValue, out result);
+            default:
+                result = 0f;
+                return false;
+        }
+    }
+
+    private static bool TryGetInt(object? value, out int result)
+    {
+        switch (value)
+        {
+            case int intValue:
+                result = intValue;
+                return true;
+            case long longValue:
+                result = (int)longValue;
+                return true;
+            case float floatValue:
+                result = Mathf.RoundToInt(floatValue);
+                return true;
+            case double doubleValue:
+                result = (int)Math.Round(doubleValue);
+                return true;
+            case string stringValue:
+                return int.TryParse(stringValue.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
+            default:
+                result = 0;
+                return false;
+        }
+    }
+
+    private static bool TryGetBool(object? value, out bool result)
+    {
+        switch (value)
+        {
+            case bool boolValue:
+                result = boolValue;
+                return true;
+            case string stringValue:
+                return bool.TryParse(stringValue.Trim(), out result);
+            default:
+                result = false;
+                return false;
+        }
     }
 
     private static bool TryResolveBiomeKey(string value, out int biome)
@@ -223,10 +514,11 @@ internal static class TerrainMistileSpawnRules
         }
 
         float interval = values.Interval ?? fallback.Interval;
-        float searchRange = values.SearchRange ?? fallback.SearchRange;
+        float playerSearchRadius = values.PlayerSearchRadius ?? fallback.PlayerSearchRadius;
         float spawnChance = values.SpawnChance ?? fallback.SpawnChance;
         bool scaleSpawnsWithNearbyPlayers = values.PerPlayerSpawn ?? fallback.ScaleSpawnsWithNearbyPlayers;
         int ignorePlayerBaseBaseValue = values.PlayerBaseValue ?? fallback.IgnorePlayerBaseBaseValue;
+        float baseCheckRadius = values.BaseCheckRadius ?? fallback.BaseCheckRadius;
         int maxActiveTerrainMistilesPerArea = values.MaxSpawn ?? fallback.MaxActiveTerrainMistilesPerArea;
         float spawnRadiusMin = fallback.SpawnRadiusMin;
         float spawnRadiusMax = fallback.SpawnRadiusMax;
@@ -256,9 +548,10 @@ internal static class TerrainMistileSpawnRules
         }
 
         interval = Mathf.Clamp(interval, 0f, 3600f);
-        searchRange = Mathf.Clamp(searchRange, 0f, 512f);
+        playerSearchRadius = Mathf.Clamp(playerSearchRadius, 0f, 512f);
         spawnChance = Mathf.Clamp01(spawnChance);
         ignorePlayerBaseBaseValue = Mathf.Clamp(ignorePlayerBaseBaseValue, 0, 10);
+        baseCheckRadius = Mathf.Clamp(baseCheckRadius, 0f, 128f);
         maxActiveTerrainMistilesPerArea = Mathf.Clamp(maxActiveTerrainMistilesPerArea, 0, 50);
         spawnRadiusMin = Mathf.Clamp(spawnRadiusMin, 1f, 256f);
         spawnRadiusMax = Mathf.Clamp(spawnRadiusMax, 1f, 256f);
@@ -272,10 +565,11 @@ internal static class TerrainMistileSpawnRules
 
         return new TerrainMistileBiomeSpawnRule(
             interval,
-            searchRange,
+            playerSearchRadius,
             spawnChance,
             scaleSpawnsWithNearbyPlayers,
             ignorePlayerBaseBaseValue,
+            baseCheckRadius,
             maxActiveTerrainMistilesPerArea,
             spawnRadiusMin,
             spawnRadiusMax,
@@ -287,7 +581,7 @@ internal static class TerrainMistileSpawnRules
 
     private static void RecalculateRuntimeState()
     {
-        _maxSearchRange = _defaultRule.Enabled ? _defaultRule.SearchRange : 0f;
+        _maxPlayerSearchRadius = _defaultRule.Enabled ? _defaultRule.PlayerSearchRadius : 0f;
         _maxResetRadius = _defaultRule.ResetRadius;
         _hasEnabledRules = _defaultRule.Enabled;
 
@@ -300,7 +594,7 @@ internal static class TerrainMistileSpawnRules
             }
 
             _hasEnabledRules = true;
-            _maxSearchRange = Mathf.Max(_maxSearchRange, rule.SearchRange);
+            _maxPlayerSearchRadius = Mathf.Max(_maxPlayerSearchRadius, rule.PlayerSearchRadius);
         }
     }
 
@@ -308,10 +602,11 @@ internal static class TerrainMistileSpawnRules
     {
         return new TerrainMistileBiomeSpawnRule(
             DefaultInterval,
-            DefaultSearchRange,
+            DefaultPlayerSearchRadius,
             DefaultSpawnChance,
             DefaultScaleSpawnsWithNearbyPlayers,
             DefaultIgnorePlayerBaseBaseValue,
+            DefaultBaseCheckRadius,
             DefaultMaxActiveTerrainMistilesPerArea,
             DefaultSpawnRadiusMin,
             DefaultSpawnRadiusMax,
@@ -369,20 +664,33 @@ internal static class TerrainMistileSpawnRules
         return value.Trim().Replace(" ", "").Replace("_", "").Replace("-", "");
     }
 
+    private static string BuildDefaultPlayerBasePrefabsYaml()
+    {
+        StringBuilder builder = new();
+        builder.AppendLine("# TerrainMistile base prefabs used by playerBaseValue. Only instances with ZDO longs.creator != 0 are counted.");
+        builder.AppendLine("playerBasePrefabs:");
+        foreach (string prefabName in DefaultPlayerBasePrefabNames)
+        {
+            builder.Append("  - ").AppendLine(prefabName);
+        }
+
+        return builder.ToString();
+    }
+
     private static string BuildDefaultYaml()
     {
         return
-            "# PlayerBase EffectArea prefabs from vanilla dump: ashwood_bed, bed, blackforge, blastfurnace, BogWitch_Fire_Pit, bonfire, charcoal_kiln, charred_shieldgenerator, dverger_guardstone, eitrrefinery, fermenter, fire_pit, fire_pit_haldor, fire_pit_hildir, fire_pit_iron, forge, guard_stone, hearth, piece_artisanstation, piece_bed02, piece_brazierceiling01, piece_brazierfloor01, piece_brazierfloor02, piece_groundtorch, piece_groundtorch_blue, piece_groundtorch_green, piece_groundtorch_mist, piece_groundtorch_wood, piece_magetable, piece_oven, piece_shieldgenerator, piece_spinningwheel, piece_stonecutter, piece_walltorch, piece_workbench, portal, portal_stone, portal_wood, smelter, windmill\n" +
             "# Expand World Data custom biomes can use their custom biome name or numeric biome value.\n" +
-            "# defaults is reserved. Every other top-level key is treated as a biome rule.\n" +
+            "# defaults and playerBasePrefabs are reserved. Every other top-level key is treated as a biome rule.\n" +
             "\n" +
             "defaults:\n" +
             "  interval: 60 # Seconds between spawn rolls for one 32m terrain unit. 0 disables that biome.\n" +
-            "  searchRange: 24 # Players within this horizontal range of a changed terrain unit activate its rolls.\n" +
+            "  playerSearchRadius: 32 # Players within this horizontal radius of a changed terrain unit activate its rolls.\n" +
             "  spawnChance: 0.25 # Chance used when the unit interval is ready and at least one player is nearby.\n" +
             "  maxSpawn: 3 # Maximum active TerrainMistiles with targets within 32m of the target. 0 disables that biome.\n" +
             "  perPlayerSpawn: true # If true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by maxSpawn and available targets.\n" +
-            "  playerBaseValue: 1 # playerBaseValue N skips spawn checks when at least N unique PlayerBase EffectArea prefab types are within 20m of the changed terrain. Check the PlayerBase prefab list above. 0 disables the PlayerBase check.\n" +
+            "  playerBaseValue: 1 # playerBaseValue N skips spawn checks when at least N unique listed player-placed base prefab types are within baseCheckRadius meters horizontally of the changed terrain. 0 disables the PlayerBase check.\n" +
+            "  baseCheckRadius: 24 # Horizontal radius used by playerBaseValue to count listed player-placed base prefab types.\n" +
             "  spawnRadius: 16~32 # Horizontal spawn distance from the selected nearby player. Use 24 for fixed distance or 16~32 for a random range.\n" +
             "  spawnAltitude: 8 # Height above solid ground where TerrainMistile spawns.\n" +
             "  resetRadius: 8 # Radius of terrain height and paint reset when TerrainMistile detonates.\n" +
@@ -398,35 +706,44 @@ internal static class TerrainMistileSpawnRules
             "  resetRadius: 6\n" +
             "  visualColor: \"#2ED36F\"\n" +
             "Swamp:\n" +
+            "  playerBaseValue: 2\n" +
             "  visualColor: \"#8FBF3F\"\n" +
             "Mountain:\n" +
             "  interval: 120\n" +
+            "  playerBaseValue: 2\n" +
             "  resetRadius: 6\n" +
             "  visualColor: \"#8FE8FF\"\n" +
             "Plains:\n" +
             "  interval: 120\n" +
+            "  playerBaseValue: 3\n" +
             "  resetRadius: 6\n" +
             "  visualColor: \"#FFD15C\"\n" +
             "Mistlands:\n" +
             "  interval: 120\n" +
+            "  playerBaseValue: 3\n" +
             "  resetRadius: 6\n" +
             "  visualColor: \"#B58CFF\"\n" +
             "AshLands:\n" +
+            "  playerBaseValue: 4\n" +
             "  visualColor: \"#FF5A2E\"\n" +
             "DeepNorth:\n" +
+            "  playerBaseValue: 4\n" +
             "  visualColor: \"#BFEFFF\"\n" +
             "Ocean:\n" +
-            "  visualColor: \"#3EA7FF\"\n";
+            "  visualColor: \"#3EA7FF\"\n" +
+            "\n" +
+            BuildDefaultPlayerBasePrefabsYaml();
     }
 
     private sealed class TerrainMistileSpawnRuleValues
     {
         public float? Interval { get; set; }
-        public float? SearchRange { get; set; }
+        public float? PlayerSearchRadius { get; set; }
         public float? SpawnChance { get; set; }
         public int? MaxSpawn { get; set; }
         public bool? PerPlayerSpawn { get; set; }
         public int? PlayerBaseValue { get; set; }
+        public float? BaseCheckRadius { get; set; }
         public string? SpawnRadius { get; set; }
         public float? SpawnAltitude { get; set; }
         public float? ResetRadius { get; set; }
@@ -684,10 +1001,11 @@ internal readonly struct TerrainMistileBiomeSpawnRule
 {
     public TerrainMistileBiomeSpawnRule(
         float interval,
-        float searchRange,
+        float playerSearchRadius,
         float spawnChance,
         bool scaleSpawnsWithNearbyPlayers,
         int ignorePlayerBaseBaseValue,
+        float baseCheckRadius,
         int maxActiveTerrainMistilesPerArea,
         float spawnRadiusMin,
         float spawnRadiusMax,
@@ -697,10 +1015,11 @@ internal readonly struct TerrainMistileBiomeSpawnRule
         Color visualColor)
     {
         Interval = interval;
-        SearchRange = searchRange;
+        PlayerSearchRadius = playerSearchRadius;
         SpawnChance = spawnChance;
         ScaleSpawnsWithNearbyPlayers = scaleSpawnsWithNearbyPlayers;
         IgnorePlayerBaseBaseValue = ignorePlayerBaseBaseValue;
+        BaseCheckRadius = baseCheckRadius;
         MaxActiveTerrainMistilesPerArea = maxActiveTerrainMistilesPerArea;
         SpawnRadiusMin = spawnRadiusMin;
         SpawnRadiusMax = spawnRadiusMax;
@@ -711,10 +1030,11 @@ internal readonly struct TerrainMistileBiomeSpawnRule
     }
 
     public float Interval { get; }
-    public float SearchRange { get; }
+    public float PlayerSearchRadius { get; }
     public float SpawnChance { get; }
     public bool ScaleSpawnsWithNearbyPlayers { get; }
     public int IgnorePlayerBaseBaseValue { get; }
+    public float BaseCheckRadius { get; }
     public int MaxActiveTerrainMistilesPerArea { get; }
     public float SpawnRadiusMin { get; }
     public float SpawnRadiusMax { get; }
@@ -722,10 +1042,10 @@ internal readonly struct TerrainMistileBiomeSpawnRule
     public float ResetRadius { get; }
     public float Health { get; }
     public Color VisualColor { get; }
-    public bool Enabled => Interval > 0f && SearchRange > 0f && SpawnChance > 0f && MaxActiveTerrainMistilesPerArea > 0;
+    public bool Enabled => Interval > 0f && PlayerSearchRadius > 0f && SpawnChance > 0f && MaxActiveTerrainMistilesPerArea > 0;
 
     public override string ToString()
     {
-        return $"interval={Interval:0.##}, searchRange={SearchRange:0.##}, spawnChance={SpawnChance:0.###}, maxActive={MaxActiveTerrainMistilesPerArea}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
+        return $"interval={Interval:0.##}, playerSearchRadius={PlayerSearchRadius:0.##}, spawnChance={SpawnChance:0.###}, maxActive={MaxActiveTerrainMistilesPerArea}, playerBaseValue={IgnorePlayerBaseBaseValue}, baseCheckRadius={BaseCheckRadius:0.##}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
     }
 }

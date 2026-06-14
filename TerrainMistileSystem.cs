@@ -8,7 +8,6 @@ namespace TerrainMistile;
 
 internal static class TerrainMistileSystem
 {
-    private const float PlayerBaseValueRadius = 20f;
     private const string ResetEffectsRpcName = "TerrainMistile_ResetEffects";
     private const float ResetEffectGroundOffset = 0.1f;
     private const float FallbackEffectDestroyDelay = 20f;
@@ -16,8 +15,8 @@ internal static class TerrainMistileSystem
     private const float SpawnUnitSize = 32f;
     private const float SpawnUnitScanInterval = 1f;
     private const float SpawnUnitRollStateRetention = 600f;
-    private const float PlayerBaseIgnoredSpawnUnitRetention = 1.25f;
     private const float NoModifiedTerrainCompRetention = 3f;
+    private const float PlayerBasePieceBucketRefreshInterval = 2f;
     private const float TargetReservationDuration = 60f;
     private const float ExternalTerrainIgnoreMergeDistance = 0.25f;
     internal const float LocationTerrainProtectionPadding = 5f;
@@ -27,14 +26,12 @@ internal static class TerrainMistileSystem
 
     // Per-unit state keeps persistent scans cheap while still allowing changed terrain to re-enter after edits or expiry.
     private static readonly Dictionary<SpawnUnitKey, float> LastSpawnRollTimeByUnit = new();
-    private static readonly Dictionary<SpawnUnitKey, float> PlayerBaseIgnoredSpawnUnits = new();
     private static readonly Dictionary<TerrainComp, NoModifiedTerrainCompCache> NoModifiedTerrainComps = new();
     private static readonly Dictionary<SpawnUnitKey, ModifiedTerrainUnitCandidate> ModifiedTerrainUnits = new();
 
     // These scratch collections are reused by the scan/reset hot paths to avoid per-tick allocations.
     private static readonly List<SpawnUnitKey> TempSpawnUnitKeys = new();
     private static readonly HashSet<SpawnUnitKey> TempCooldownSpawnUnitKeys = new();
-    private static readonly List<SpawnUnitKey> TempPlayerBaseIgnoredSpawnUnitKeys = new();
     private static readonly List<TerrainComp> TempNoModifiedTerrainComps = new();
     private static readonly List<TerrainMistileBehaviour> ActiveTerrainMistiles = new();
     private static readonly List<Player> TempPlayers = new();
@@ -45,8 +42,10 @@ internal static class TerrainMistileSystem
     private static readonly List<TargetReservation> TargetReservations = new();
     private static readonly List<ExternalTerrainIgnoreArea> ExternalTerrainIgnoreAreas = new();
     private static readonly List<ExternalTerrainIgnoreArea> ProtectedTerrainAreas = new();
-    private static readonly Collider[] PlayerBaseTempColliders = new Collider[1024];
+    private static readonly Dictionary<PlayerBasePieceBucketKey, List<PlayerBasePiece>> PlayerBasePiecesByBucket = new();
     private static readonly HashSet<string> TempPlayerBasePrefabNames = new(StringComparer.OrdinalIgnoreCase);
+    private static bool _playerBasePieceBucketsBuilt;
+    private static float _nextPlayerBasePieceBucketRefreshTime;
     private static bool _resettingTerrain;
     private static float _nextSpawnUnitScanTime;
     private static bool _resetEffectsRpcRegistered;
@@ -218,8 +217,10 @@ internal static class TerrainMistileSystem
     internal static void ClearSpawnUnitRollState()
     {
         LastSpawnRollTimeByUnit.Clear();
-        PlayerBaseIgnoredSpawnUnits.Clear();
         NoModifiedTerrainComps.Clear();
+        PlayerBasePiecesByBucket.Clear();
+        _playerBasePieceBucketsBuilt = false;
+        _nextPlayerBasePieceBucketRefreshTime = 0f;
     }
 
     private static void CollectEligiblePlayers()
@@ -243,7 +244,7 @@ internal static class TerrainMistileSystem
             return false;
         }
 
-        GetNearbyPlayers(unit.TargetPoint, rule.SearchRange, TempPlayers, TempNearbyPlayers);
+        GetNearbyPlayers(unit.TargetPoint, rule.PlayerSearchRadius, TempPlayers, TempNearbyPlayers);
         if (TempNearbyPlayers.Count == 0)
         {
             return false;
@@ -329,26 +330,6 @@ internal static class TerrainMistileSystem
         }
     }
 
-    private static bool HasPlayerWithinRange(Vector3 point, float range)
-    {
-        float rangeSqr = range * range;
-        foreach (Player player in TempPlayers)
-        {
-            if (!player)
-            {
-                continue;
-            }
-
-            Vector3 playerPosition = ((Component)player).transform.position;
-            if (HorizontalDistanceSqr(playerPosition, point) <= rangeSqr)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static void CleanupSpawnUnitRollState()
     {
         TempSpawnUnitKeys.Clear();
@@ -371,12 +352,11 @@ internal static class TerrainMistileSystem
     private static void CollectModifiedTerrainUnits()
     {
         CleanupTargetState();
-        CleanupPlayerBaseIgnoredSpawnUnits();
         CleanupNoModifiedTerrainComps();
         ModifiedTerrainUnits.Clear();
         TempCooldownSpawnUnitKeys.Clear();
-        float maxSearchRange = TerrainMistileSpawnRules.MaxSearchRange;
-        if (maxSearchRange <= 0f)
+        float maxPlayerSearchRadius = TerrainMistileSpawnRules.MaxPlayerSearchRadius;
+        if (maxPlayerSearchRadius <= 0f)
         {
             return;
         }
@@ -388,7 +368,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (!IsTerrainCompNearAnyPlayer(terrainComp, maxSearchRange))
+            if (!IsTerrainCompNearAnyPlayer(terrainComp, maxPlayerSearchRadius))
             {
                 continue;
             }
@@ -436,23 +416,13 @@ internal static class TerrainMistileSystem
                 }
 
                 SpawnUnitKey key = GetSpawnUnitKey(candidate, biome);
-                if (IsPlayerBaseIgnoredSpawnUnit(key))
-                {
-                    continue;
-                }
-
                 if (TempCooldownSpawnUnitKeys.Contains(key) || IsSpawnUnitWaitingForInterval(key, rule))
                 {
                     TempCooldownSpawnUnitKeys.Add(key);
                     continue;
                 }
 
-                if (!HasPlayerWithinRange(candidate, rule.SearchRange))
-                {
-                    continue;
-                }
-
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false, key))
+                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
                 {
                     continue;
                 }
@@ -564,13 +534,7 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                SpawnUnitKey key = GetSpawnUnitKey(candidate, biome);
-                if (IsPlayerBaseIgnoredSpawnUnit(key))
-                {
-                    continue;
-                }
-
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false, key))
+                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
                 {
                     continue;
                 }
@@ -599,7 +563,7 @@ internal static class TerrainMistileSystem
         return LastSpawnRollTimeByUnit.TryGetValue(key, out float lastSpawnRoll) && Time.time - lastSpawnRoll < rule.Interval;
     }
 
-    private static bool IsEligibleModifiedTerrainTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip, SpawnUnitKey? spawnUnitKey = null)
+    private static bool IsEligibleModifiedTerrainTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip)
     {
         if (IsIgnoredByExternalTerrain(point, logSkip))
         {
@@ -611,7 +575,7 @@ internal static class TerrainMistileSystem
             return false;
         }
 
-        if (IsIgnoredByPlayerBaseTarget(point, rule, logSkip, spawnUnitKey))
+        if (IsIgnoredByPlayerBase(point, rule, logSkip))
         {
             return false;
         }
@@ -624,39 +588,15 @@ internal static class TerrainMistileSystem
         return true;
     }
 
-    private static bool IsIgnoredByPlayerBaseTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip, SpawnUnitKey? spawnUnitKey)
-    {
-        return spawnUnitKey.HasValue
-            ? IsIgnoredByPlayerBaseSpawnUnit(point, rule, spawnUnitKey.Value, logSkip)
-            : IsIgnoredByPlayerBase(point, rule, logSkip);
-    }
-
-    private static bool IsIgnoredByPlayerBaseSpawnUnit(Vector3 point, TerrainMistileBiomeSpawnRule rule, SpawnUnitKey key, bool logSkip)
-    {
-        if (IsPlayerBaseIgnoredSpawnUnit(key))
-        {
-            return true;
-        }
-
-        if (!IsIgnoredByPlayerBase(point, rule, logSkip))
-        {
-            return false;
-        }
-
-        PlayerBaseIgnoredSpawnUnits[key] = Time.time + PlayerBaseIgnoredSpawnUnitRetention;
-        ModifiedTerrainUnits.Remove(key);
-        return true;
-    }
-
     private static bool IsIgnoredByPlayerBase(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip)
     {
         int threshold = rule.IgnorePlayerBaseBaseValue;
-        if (threshold <= 0)
+        if (threshold <= 0 || rule.BaseCheckRadius <= 0f)
         {
             return false;
         }
 
-        int baseValue = GetUniquePlayerBasePrefabCount(point);
+        int baseValue = GetUniquePlayerBasePrefabCount(point, threshold, rule.BaseCheckRadius);
         if (baseValue < threshold)
         {
             return false;
@@ -664,69 +604,103 @@ internal static class TerrainMistileSystem
 
         if (logSkip)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile spawn roll at {point}; unique player base prefab count {baseValue} >= configured threshold {threshold}.");
+            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile spawn roll at {point}; unique player base prefab count {baseValue} >= configured threshold {threshold} within {rule.BaseCheckRadius:0.##}m.");
         }
 
         return true;
     }
 
-    private static int GetUniquePlayerBasePrefabCount(Vector3 point)
+    private static int GetUniquePlayerBasePrefabCount(Vector3 point, int threshold, float radius)
     {
+        EnsurePlayerBasePieceBuckets();
         TempPlayerBasePrefabNames.Clear();
-        int hits = Physics.OverlapSphereNonAlloc(point, PlayerBaseValueRadius, PlayerBaseTempColliders);
+        float radiusSqr = radius * radius;
+        PlayerBasePieceBucketKey centerKey = GetPlayerBasePieceBucketKey(point);
+        int bucketRange = Mathf.CeilToInt(radius / SpawnUnitSize);
 
-        for (int i = 0; i < hits; i++)
+        for (int z = centerKey.Z - bucketRange; z <= centerKey.Z + bucketRange; z++)
         {
-            Collider collider = PlayerBaseTempColliders[i];
-            if (!collider)
+            for (int x = centerKey.X - bucketRange; x <= centerKey.X + bucketRange; x++)
             {
-                continue;
-            }
+                PlayerBasePieceBucketKey key = new(x, z);
+                if (!PlayerBasePiecesByBucket.TryGetValue(key, out List<PlayerBasePiece> pieces))
+                {
+                    continue;
+                }
 
-            EffectArea effectArea = collider.GetComponent<EffectArea>();
-            if (!IsPlayerBaseEffectArea(effectArea))
-            {
-                continue;
-            }
+                foreach (PlayerBasePiece piece in pieces)
+                {
+                    if (HorizontalDistanceSqr(point, piece.Position) > radiusSqr)
+                    {
+                        continue;
+                    }
 
-            TempPlayerBasePrefabNames.Add(GetPlayerBasePrefabName(effectArea));
+                    TempPlayerBasePrefabNames.Add(piece.PrefabName);
+                    if (TempPlayerBasePrefabNames.Count >= threshold)
+                    {
+                        return TempPlayerBasePrefabNames.Count;
+                    }
+                }
+            }
         }
 
         return TempPlayerBasePrefabNames.Count;
     }
 
-    private static bool IsPlayerBaseIgnoredSpawnUnit(SpawnUnitKey key)
+    private static void EnsurePlayerBasePieceBuckets()
     {
-        if (!PlayerBaseIgnoredSpawnUnits.TryGetValue(key, out float expireTime))
+        if (_playerBasePieceBucketsBuilt && Time.time < _nextPlayerBasePieceBucketRefreshTime)
         {
-            return false;
+            return;
         }
 
-        if (Time.time < expireTime)
+        PlayerBasePiecesByBucket.Clear();
+        foreach (Piece piece in Piece.s_allPieces)
         {
-            return true;
+            if (!piece)
+            {
+                continue;
+            }
+
+            if (!HasNonZeroCreator(piece))
+            {
+                continue;
+            }
+
+            GameObject gameObject = ((Component)piece).gameObject;
+            string prefabName = GetStablePrefabName(gameObject);
+            if (!TerrainMistileSpawnRules.IsPlayerBasePrefabName(prefabName))
+            {
+                continue;
+            }
+
+            Vector3 position = ((Component)piece).transform.position;
+            PlayerBasePieceBucketKey key = GetPlayerBasePieceBucketKey(position);
+            if (!PlayerBasePiecesByBucket.TryGetValue(key, out List<PlayerBasePiece> pieces))
+            {
+                pieces = new List<PlayerBasePiece>();
+                PlayerBasePiecesByBucket[key] = pieces;
+            }
+
+            pieces.Add(new PlayerBasePiece(prefabName, position));
         }
 
-        PlayerBaseIgnoredSpawnUnits.Remove(key);
-        return false;
+        _playerBasePieceBucketsBuilt = true;
+        _nextPlayerBasePieceBucketRefreshTime = Time.time + PlayerBasePieceBucketRefreshInterval;
     }
 
-    private static void CleanupPlayerBaseIgnoredSpawnUnits()
+    private static bool HasNonZeroCreator(Piece piece)
     {
-        TempPlayerBaseIgnoredSpawnUnitKeys.Clear();
-        float now = Time.time;
-        foreach (KeyValuePair<SpawnUnitKey, float> entry in PlayerBaseIgnoredSpawnUnits)
-        {
-            if (entry.Value <= now)
-            {
-                TempPlayerBaseIgnoredSpawnUnitKeys.Add(entry.Key);
-            }
-        }
+        ZNetView zNetView = ((Component)piece).GetComponent<ZNetView>();
+        ZDO? zdo = zNetView ? zNetView.GetZDO() : null;
+        return zdo != null && zdo.GetLong(ZDOVars.s_creator, 0L) != 0L;
+    }
 
-        foreach (SpawnUnitKey key in TempPlayerBaseIgnoredSpawnUnitKeys)
-        {
-            PlayerBaseIgnoredSpawnUnits.Remove(key);
-        }
+    private static PlayerBasePieceBucketKey GetPlayerBasePieceBucketKey(Vector3 point)
+    {
+        return new PlayerBasePieceBucketKey(
+            Mathf.FloorToInt(point.x / SpawnUnitSize),
+            Mathf.FloorToInt(point.z / SpawnUnitSize));
     }
 
     private static bool IsKnownNoModifiedTerrainComp(TerrainComp terrainComp)
@@ -775,28 +749,6 @@ internal static class TerrainMistileSystem
         {
             NoModifiedTerrainComps.Remove(terrainComp);
         }
-    }
-
-    private static bool IsPlayerBaseEffectArea(EffectArea effectArea)
-    {
-        return effectArea && (effectArea.m_type & EffectArea.Type.PlayerBase) != EffectArea.Type.None;
-    }
-
-    private static string GetPlayerBasePrefabName(Component component)
-    {
-        Piece piece = component.GetComponentInParent<Piece>();
-        if (piece)
-        {
-            return GetStablePrefabName(((Component)piece).gameObject);
-        }
-
-        ZNetView zNetView = component.GetComponentInParent<ZNetView>();
-        if (zNetView)
-        {
-            return GetStablePrefabName(((Component)zNetView).gameObject);
-        }
-
-        return GetStablePrefabName(component.gameObject);
     }
 
     private static string GetStablePrefabName(GameObject gameObject)
@@ -1251,8 +1203,58 @@ internal static class TerrainMistileSystem
 
     internal static bool TryFindReplacementTerrainTarget(Vector3 center, out Vector3 modifiedPoint)
     {
-        float range = Mathf.Max(TerrainMistileSpawnRules.MaxSearchRange, TerrainMistileSpawnRules.MaxResetRadius);
+        float range = Mathf.Max(TerrainMistileSpawnRules.MaxPlayerSearchRadius, TerrainMistileSpawnRules.MaxResetRadius);
+        if (TryFindCachedModifiedTerrainNear(center, range, out modifiedPoint))
+        {
+            return true;
+        }
+
         return TryFindModifiedTerrainNear(center, range, out modifiedPoint);
+    }
+
+    private static bool TryFindCachedModifiedTerrainNear(Vector3 center, float range, out Vector3 modifiedPoint)
+    {
+        CleanupTargetState();
+
+        float rangeSqr = range * range;
+        bool found = false;
+        float bestScore = float.MinValue;
+        Vector3 bestPoint = default;
+
+        foreach (ModifiedTerrainUnitCandidate unit in ModifiedTerrainUnits.Values)
+        {
+            Vector3 candidate = unit.TargetPoint;
+            if (HorizontalDistanceSqr(candidate, center) > rangeSqr)
+            {
+                continue;
+            }
+
+            if (!TerrainMistileSpawnRules.TryGetEnabledRule(unit.Biome, out TerrainMistileBiomeSpawnRule rule))
+            {
+                continue;
+            }
+
+            if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
+            {
+                continue;
+            }
+
+            if (!HasModifiedTerrainAround(candidate, rule.ResetRadius))
+            {
+                continue;
+            }
+
+            float score = GetTargetSpreadScore(candidate, center);
+            if (!found || score > bestScore)
+            {
+                found = true;
+                bestScore = score;
+                bestPoint = candidate;
+            }
+        }
+
+        modifiedPoint = bestPoint;
+        return found;
     }
 
     internal static float GetResetRadiusForPoint(Vector3 point)
@@ -1422,6 +1424,48 @@ internal static class TerrainMistileSystem
         public float Radius;
         public string Source = "";
         public float ExpireTime;
+    }
+
+    private readonly struct PlayerBasePiece
+    {
+        public PlayerBasePiece(string prefabName, Vector3 position)
+        {
+            PrefabName = prefabName;
+            Position = position;
+        }
+
+        public string PrefabName { get; }
+        public Vector3 Position { get; }
+    }
+
+    private readonly struct PlayerBasePieceBucketKey : IEquatable<PlayerBasePieceBucketKey>
+    {
+        public PlayerBasePieceBucketKey(int x, int z)
+        {
+            X = x;
+            Z = z;
+        }
+
+        public int X { get; }
+        public int Z { get; }
+
+        public bool Equals(PlayerBasePieceBucketKey other)
+        {
+            return X == other.X && Z == other.Z;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is PlayerBasePieceBucketKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (X * 397) ^ Z;
+            }
+        }
     }
 
     private readonly struct NoModifiedTerrainCompCache
