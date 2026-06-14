@@ -8,8 +8,8 @@
         <ProjectGuid>{4358610B-F3F4-4843-B7AF-98B7BC60DCDE}</ProjectGuid>
         <OutputType>Library</OutputType>
         <AppDesignerFolder>Properties</AppDesignerFolder>
-        <RootNamespace>ServerSyncModTemplate</RootNamespace>
-        <AssemblyName>ServerSyncModTemplate</AssemblyName>
+        <RootNamespace>TerrainMistile</RootNamespace>
+        <AssemblyName>TerrainMistile</AssemblyName>
         <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
         <LangVersion>preview</LangVersion>
@@ -78,6 +78,10 @@
         <Reference Include="BepInEx">
             <HintPath>$(BepInExPath)\core\BepInEx.dll</HintPath>
         </Reference>
+        <Reference Include="Jotunn">
+            <HintPath>Libs\Jotunn.dll</HintPath>
+            <Private>False</Private>
+        </Reference>
         <Reference Include="ServerSync">
             <HintPath>Libs\ServerSync.dll</HintPath>
         </Reference>
@@ -100,16 +104,31 @@
         <Reference Include="UnityEngine.InputLegacyModule">
             <HintPath>$(CorlibPath)\UnityEngine.InputLegacyModule.dll</HintPath>
         </Reference>
+        <Reference Include="UnityEngine.PhysicsModule">
+            <HintPath>$(CorlibPath)\UnityEngine.PhysicsModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.ParticleSystemModule">
+            <HintPath>$(CorlibPath)\UnityEngine.ParticleSystemModule.dll</HintPath>
+        </Reference>
         <Reference Include="UnityEngine.UI">
             <HintPath>$(CorlibPath)\UnityEngine.UI.dll</HintPath>
         </Reference>
         <Reference Include="Unity.TextMeshPro">
             <HintPath>$(GamePath)\valheim_Data\Managed\Unity.TextMeshPro.dll</HintPath>
         </Reference>
+        <Reference Include="YamlDotNet">
+            <HintPath>$(UserProfile)\.nuget\packages\yamldotnet\16.3.0\lib\net47\YamlDotNet.dll</HintPath>
+        </Reference>
     </ItemGroup>
     <ItemGroup>
-        <Compile Include="LocalizationManager.cs"/>
         <Compile Include="Plugin.cs"/>
+        <Compile Include="TerrainMistileBehaviour.cs"/>
+        <Compile Include="TerrainMistileCompat.cs"/>
+        <Compile Include="TerrainMistileExternalTerrainCompat.cs"/>
+        <Compile Include="TerrainMistilePatches.cs"/>
+        <Compile Include="TerrainMistilePrefab.cs"/>
+        <Compile Include="TerrainMistileSpawnRules.cs"/>
+        <Compile Include="TerrainMistileSystem.cs"/>
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="VersionHandshake.cs"/>
     </ItemGroup>
@@ -120,12 +139,12 @@
         <Content Include="Libs\ServerSync.dll">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </Content>
+        <Content Include="Libs\Jotunn.dll"/>
         <Content Include="LICENSE.txt"/>
         <Content Include="README.md"/>
         <Content Include="Thunderstore\CHANGELOG.md"/>
         <Content Include="Thunderstore\icon.png"/>
         <Content Include="Thunderstore\manifest.json"/>
-        <EmbeddedResource Include="translations\English.yml"/>
         <Content Include="UpdateManifest.ps1"/>
     </ItemGroup>
     <ItemGroup>

@@ -1,34 +1,45 @@
 ﻿using System;
 using System.IO;
-using System.Linq;
 using System.Reflection;
-using System.Timers;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using JetBrains.Annotations;
+using Jotunn;
 using ServerSync;
-using UnityEngine;
 
-namespace ServerSyncModTemplate;
+namespace TerrainMistile;
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
-public class ServerSyncModTemplatePlugin : BaseUnityPlugin
+[BepInDependency(Main.ModGuid)]
+public class TerrainMistilePlugin : BaseUnityPlugin
 {
-    internal const string ModName = "ServerSyncModTemplate";
+    internal const string ModName = "TerrainMistile";
     internal const string ModVersion = "1.0.0";
-    internal const string Author = "{Azumatt}";
+    internal const string Author = "sighsorry";
+    internal const string DefaultDisplayName = "Earth Warden";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
     private static string ConfigFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + ConfigFileName;
+    private static string SpawnRulesFileName = $"{ModName}.yml";
+    internal static string SpawnRulesFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + SpawnRulesFileName;
     internal static string ConnectionError = "";
     private readonly Harmony _harmony = new(ModGUID);
-    public static readonly ManualLogSource ServerSyncModTemplateLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
+    public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     private static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
-    private FileSystemWatcher _watcher;
+    internal static string DisplayName
+    {
+        get
+        {
+            string value = (_displayName?.Value ?? "").Trim();
+            return value.Length == 0 ? DefaultDisplayName : value;
+        }
+    }
+    private FileSystemWatcher _watcher = null!;
+    private FileSystemWatcher _spawnRulesWatcher = null!;
     private readonly object _reloadLock = new();
     private DateTime _lastConfigReloadTime;
+    private DateTime _lastSpawnRulesReloadTime;
     private const long RELOAD_DELAY = 10000000; // One second
 
     public enum Toggle
@@ -42,17 +53,27 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
 
-        // Uncomment the line below to use the LocalizationManager for localizing your mod.
-        // Make sure to populate the English.yml file in the translation folder with your keys to be localized and the values associated before uncommenting!.
-        //Localizer.Load(); // Use this to initialize the LocalizationManager (for more information on LocalizationManager, see the LocalizationManager documentation https://github.com/blaxxun-boop/LocalizationManager#example-project).
-
         _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
+        _displayName = config("2 - Display", "Display Name", DefaultDisplayName, "In-game name shown to players for TerrainMistile.");
 
+        TerrainMistileSpawnRules.Initialize(TerrainMistileLogger);
+        TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
+        SpawnRulesYaml = new CustomSyncedValue<string>(ConfigSync, "SpawnRulesYaml", string.Empty);
+        SpawnRulesYaml.ValueChanged += OnSyncedSpawnRulesYamlChanged;
+        ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
+        TerrainMistileSpawnRules.LoadYamlText(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
+
+        TerrainMistilePrefab.RegisterPrefabHook();
 
         Assembly assembly = Assembly.GetExecutingAssembly();
         _harmony.PatchAll(assembly);
+        TerrainMistileExternalTerrainCompat.Initialize(TerrainMistileLogger, _harmony);
         SetupWatcher();
+        if (ConfigSync.IsSourceOfTruth)
+        {
+            PushLocalSpawnRulesYamlToSync();
+        }
 
         Config.Save();
         if (saveOnSet)
@@ -63,8 +84,19 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
+        TerrainMistilePrefab.UnregisterPrefabHook();
+        SpawnRulesYaml.ValueChanged -= OnSyncedSpawnRulesYamlChanged;
+        ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
         SaveWithRespectToConfigSet();
         _watcher?.Dispose();
+        _spawnRulesWatcher?.Dispose();
+    }
+
+    private void Update()
+    {
+        TerrainMistileSystem.UpdateResetEffectRpcRegistration();
+        TerrainMistileExternalTerrainCompat.Update();
+        TerrainMistileSystem.UpdatePersistentTerrainSpawns();
     }
 
     private void SetupWatcher()
@@ -76,6 +108,14 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
         _watcher.IncludeSubdirectories = true;
         _watcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
         _watcher.EnableRaisingEvents = true;
+
+        _spawnRulesWatcher = new FileSystemWatcher(Paths.ConfigPath, SpawnRulesFileName);
+        _spawnRulesWatcher.Changed += ReadSpawnRulesValues;
+        _spawnRulesWatcher.Created += ReadSpawnRulesValues;
+        _spawnRulesWatcher.Renamed += ReadSpawnRulesValues;
+        _spawnRulesWatcher.IncludeSubdirectories = false;
+        _spawnRulesWatcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
+        _spawnRulesWatcher.EnableRaisingEvents = true;
     }
 
     private void ReadConfigValues(object sender, FileSystemEventArgs e)
@@ -91,23 +131,86 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
         {
             if (!File.Exists(ConfigFileFullPath))
             {
-                ServerSyncModTemplateLogger.LogWarning("Config file does not exist. Skipping reload.");
+                TerrainMistileLogger.LogWarning("Config file does not exist. Skipping reload.");
                 return;
             }
 
             try
             {
-                ServerSyncModTemplateLogger.LogDebug("Reloading configuration...");
+                TerrainMistileLogger.LogDebug("Reloading configuration...");
                 SaveWithRespectToConfigSet(true);
-                ServerSyncModTemplateLogger.LogInfo("Configuration reload complete.");
+                TerrainMistileLogger.LogInfo("Configuration reload complete.");
             }
             catch (Exception ex)
             {
-                ServerSyncModTemplateLogger.LogError($"Error reloading configuration: {ex.Message}");
+                TerrainMistileLogger.LogError($"Error reloading configuration: {ex.Message}");
             }
         }
 
         _lastConfigReloadTime = now;
+    }
+
+    private void ReadSpawnRulesValues(object sender, FileSystemEventArgs e)
+    {
+        DateTime now = DateTime.Now;
+        long time = now.Ticks - _lastSpawnRulesReloadTime.Ticks;
+        if (time < RELOAD_DELAY)
+        {
+            return;
+        }
+
+        lock (_reloadLock)
+        {
+            if (!File.Exists(SpawnRulesFileFullPath))
+            {
+                TerrainMistileLogger.LogWarning("TerrainMistile spawn rules YAML does not exist. Skipping reload.");
+                return;
+            }
+
+            if (!ConfigSync.IsSourceOfTruth)
+            {
+                TerrainMistileLogger.LogDebug("Ignoring local TerrainMistile spawn rules YAML change while server data is authoritative.");
+                return;
+            }
+
+            try
+            {
+                PushLocalSpawnRulesYamlToSync();
+                TerrainMistileLogger.LogInfo("TerrainMistile spawn rules YAML reload complete.");
+            }
+            catch (Exception ex)
+            {
+                TerrainMistileLogger.LogError($"Error reloading TerrainMistile spawn rules YAML: {ex.Message}");
+            }
+        }
+
+        _lastSpawnRulesReloadTime = now;
+    }
+
+    private void PushLocalSpawnRulesYamlToSync()
+    {
+        TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
+        string yaml = File.ReadAllText(SpawnRulesFileFullPath);
+        if (TerrainMistileSpawnRules.LoadYamlText(yaml, "local file"))
+        {
+            SpawnRulesYaml.Value = yaml;
+        }
+    }
+
+    private void OnSyncedSpawnRulesYamlChanged()
+    {
+        TerrainMistileSpawnRules.LoadYamlText(SpawnRulesYaml.Value ?? string.Empty, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync");
+    }
+
+    private void OnSourceOfTruthChanged(bool isSourceOfTruth)
+    {
+        if (isSourceOfTruth)
+        {
+            PushLocalSpawnRulesYamlToSync();
+            return;
+        }
+
+        TerrainMistileSpawnRules.LoadYamlText(SpawnRulesYaml.Value ?? string.Empty, "server sync");
     }
 
     private void SaveWithRespectToConfigSet(bool reload = false)
@@ -121,19 +224,14 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
         {
             Config.SaveOnConfigSet = originalSaveOnSet;
         }
-        
-        // If you want to do something once localization completes, LocalizationManager has a hook for that.
-        /*Localizer.OnLocalizationComplete += () =>
-        {
-            // Do something
-            ItemManagerModTemplateLogger.LogDebug("OnLocalizationComplete called");
-        };*/
     }
 
 
     #region ConfigOptions
 
     private static ConfigEntry<Toggle> _serverConfigLocked = null!;
+    private static ConfigEntry<string> _displayName = null!;
+    internal static CustomSyncedValue<string> SpawnRulesYaml = null!;
 
     private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
     {
@@ -152,53 +250,5 @@ public class ServerSyncModTemplatePlugin : BaseUnityPlugin
         return config(group, name, value, new ConfigDescription(description), synchronizedSetting);
     }
 
-    private class ConfigurationManagerAttributes
-    {
-        [UsedImplicitly] public int? Order = null!;
-        [UsedImplicitly] public bool? Browsable = null!;
-        [UsedImplicitly] public string? Category = null!;
-        [UsedImplicitly] public Action<ConfigEntryBase>? CustomDrawer = null!;
-    }
-
-    class AcceptableShortcuts() : AcceptableValueBase(typeof(KeyboardShortcut))
-    {
-        public override object Clamp(object value) => value;
-        public override bool IsValid(object value) => true;
-
-        public override string ToDescriptionString() => $"# Acceptable values: {string.Join(", ", UnityInput.Current.SupportedKeyCodes)}";
-    }
-
     #endregion
-}
-
-public static class KeyboardExtensions
-{
-    extension(KeyboardShortcut shortcut)
-    {
-        public bool IsKeyDown()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKeyDown(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
-
-        public bool IsKeyHeld()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKey(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
-    }
-}
-
-public static class ToggleExtentions
-{
-    extension(ServerSyncModTemplatePlugin.Toggle value)
-    {
-        public bool IsOn()
-        {
-            return value == ServerSyncModTemplatePlugin.Toggle.On;
-        }
-
-        public bool IsOff()
-        {
-            return value == ServerSyncModTemplatePlugin.Toggle.Off;
-        }
-    }
 }

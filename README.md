@@ -1,6 +1,65 @@
-# Server Sync Mod Template
+# TerrainMistile
 
-Can be used to already have your project set up and ready to go with ServerSync and basic version checking. Please see the [Original Repository](https://github.com/blaxxun-boop/ServerSync) if you have to update, or have further questions this template might not answer.
+Spawns a cloned Mistile prefab named `TerrainMistile` near changed terrain. TerrainMistiles use a neutral Dverger-style faction, fly toward the changed terrain point, and reset nearby `TerrainComp` deltas when they impact the terrain so the terrain returns to the world/location baseline rather than raw worldgen.
+
+Requires Jotunn and BepInEx.
+
+## Notes
+
+- Spawn rules are loaded from `BepInEx/config/TerrainMistile.yml` and synced from the server with ServerSync.
+- Changed terrain is grouped into 32 meter units. Each unit rolls on its biome rule interval while at least one player is within that biome rule's search range.
+- TerrainMistiles do not hunt players; they target the changed terrain point that caused the spawn roll.
+- Biomes can be disabled by setting their YAML `interval` or `maxSpawn` to `0`. The default YAML disables Meadows.
+- YAML biome keys support vanilla biome names, Expand World Data custom biome names, or numeric biome values.
+- `perPlayerSpawn` can make one successful unit roll spawn one TerrainMistile per nearby player when distinct changed targets are available, capped by `maxSpawn`.
+- Player base checks count distinct PlayerBase prefab types within 20 meters of the changed terrain point. YAML `playerBaseValue: 0` disables the check.
+- Resetting clears player-style `TerrainComp` height and paint deltas in the explosion radius. Location terrain deformation remains because it is reapplied by vanilla terrain modifiers during heightmap regeneration.
+- Terrain reset only runs after TerrainMistile self-destruct, terrain impact, or stuck detonation. Killing it before self-destruct does not reset terrain.
+
+## Spawn Rules YAML
+
+```yml
+# PlayerBase EffectArea prefabs from vanilla dump: ashwood_bed, bed, blackforge, blastfurnace, BogWitch_Fire_Pit, bonfire, charcoal_kiln, charred_shieldgenerator, dverger_guardstone, eitrrefinery, fermenter, fire_pit, fire_pit_haldor, fire_pit_hildir, fire_pit_iron, forge, guard_stone, hearth, piece_artisanstation, piece_bed02, piece_brazierceiling01, piece_brazierfloor01, piece_brazierfloor02, piece_groundtorch, piece_groundtorch_blue, piece_groundtorch_green, piece_groundtorch_mist, piece_groundtorch_wood, piece_magetable, piece_oven, piece_shieldgenerator, piece_spinningwheel, piece_stonecutter, piece_walltorch, piece_workbench, portal, portal_stone, portal_wood, smelter, windmill
+# Vanilla biome names: Meadows, BlackForest, Swamp, Mountain, Plains, Mistlands, AshLands, DeepNorth, Ocean
+# Expand World Data custom biomes can use their custom biome name or numeric biome value.
+# defaults is reserved. Every other top-level key is treated as a biome rule.
+defaults:
+  interval: 60 # Seconds between spawn rolls for one 32m terrain unit. 0 disables that biome.
+  searchRange: 24 # Players within this horizontal range of a changed terrain unit activate its rolls.
+  spawnChance: 0.25 # Chance used when the unit interval is ready and at least one player is nearby.
+  maxSpawn: 3 # Maximum active TerrainMistiles with targets within 32m of the target. 0 disables that biome.
+  perPlayerSpawn: true # If true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by maxSpawn and available targets.
+  playerBaseValue: 1 # Unique PlayerBase prefab type count within 20m required to suppress TerrainMistile spawning. 0 disables the PlayerBase check.
+  spawnRadius: 16~32 # Horizontal spawn distance from the selected nearby player. Use 24 for fixed distance or 16~32 for a random range.
+  spawnAltitude: 8 # Height above solid ground where TerrainMistile spawns.
+  resetRadius: 8 # Radius of terrain height and paint reset when TerrainMistile detonates.
+Meadows:
+  interval: 0
+BlackForest:
+  interval: 120
+Mountain:
+  interval: 180
+```
+
+- `interval`: seconds between spawn rolls for one changed 32 meter terrain unit. `0` disables that biome.
+- `searchRange`: horizontal player range that activates changed terrain units in that biome.
+- `spawnChance`: chance used when the unit interval is ready and at least one player is nearby.
+- `maxSpawn`: maximum active TerrainMistiles with targets within 32 meters of the target. `0` disables that biome.
+- `perPlayerSpawn`: if true, one successful unit roll can spawn one TerrainMistile per nearby player when distinct changed targets are available.
+- `playerBaseValue`: unique PlayerBase prefab type threshold that skips spawn rolls near bases. `0` disables the check.
+- `spawnRadius`: horizontal spawn distance from the selected nearby player. Use `24` for a fixed distance or `16~32` for a random range.
+- `spawnAltitude`: height above solid ground where TerrainMistile spawns.
+- `resetRadius`: terrain reset radius saved onto each TerrainMistile when it spawns.
+- `defaults` is reserved. Every other top-level key is treated as a biome rule.
+- Missing biome values use `defaults`. Expand World Data custom biome entries should use the `biome` name from `expand_biomes*.yaml`; numeric values are also accepted.
+
+## PlayerBase Detection
+
+`playerBaseValue` can skip TerrainMistile spawn checks near player bases. TerrainMistile counts distinct loaded prefab types that have a PlayerBase `EffectArea`; repeated copies of the same piece count once. When a 32 meter terrain unit is ignored by this check, that unit is briefly cached so later cells in the same unit are skipped without repeating the PlayerBase physics query. The default YAML includes the current vanilla PlayerBase prefab dump as a comment.
+
+## Original Template Notes
+
+This project started from a ServerSync template. ServerSync is still used for synchronized config and version checking.
 
 Thank you Blaxxun for ServerSync!
 
