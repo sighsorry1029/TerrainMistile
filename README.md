@@ -44,6 +44,7 @@ defaults:
   interval: 60
   playerSearchRadius: 32
   spawnChance: 0.25
+  maxDeformationSpawnChanceBonus: 0.25
   maxSpawn: 3
   perPlayerSpawn: true
   playerBaseValue: 1
@@ -102,7 +103,8 @@ The generated YAML includes the full vanilla `playerBasePrefabs` list. Add custo
 
 - `interval`: seconds between spawn rolls for one changed 32m terrain unit. `0` disables that biome.
 - `playerSearchRadius`: players within this horizontal radius activate rolls for a changed unit.
-- `spawnChance`: chance used when a unit interval is ready and at least one player is nearby.
+- `spawnChance`: base chance used when a unit interval is ready and at least one player is nearby.
+- `maxDeformationSpawnChanceBonus`: bonus added to `spawnChance` when the largest height deformation in the 32m terrain unit reaches Valheim's 8m deformation cap. The bonus scales linearly from 0m to 8m and the final chance is clamped to 1.
 - `maxSpawn`: maximum active TerrainMistiles with targets within 32m of the target. `0` disables that biome.
 - `perPlayerSpawn`: if true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by `maxSpawn` and available targets.
 - `playerBaseValue`: unique listed player-placed base prefab type count required to skip spawn checks. `0` disables the player base check.
@@ -129,7 +131,8 @@ Examples:
 
 - Increase `interval` to reduce spawn roll frequency.
 - Lower `spawnChance` to make TerrainMistiles rarer without disabling a biome.
-- Set `interval: 0` or `maxSpawn: 0` to disable a biome.
+- Lower `maxDeformationSpawnChanceBonus` if near-cap terrain edits should not strongly increase spawn chance.
+- Set both `spawnChance` and `maxDeformationSpawnChanceBonus` to `0` for chance-based suppression, or use `interval: 0` / `maxSpawn: 0` to disable a biome.
 - Increase `playerSearchRadius` if changed terrain should stay active from farther away.
 - Increase `resetRadius` for tall or wide terrain edits that need a larger reset area.
 - Raise `playerBaseValue` in dangerous biomes if simple one-piece bases should not fully suppress spawns.

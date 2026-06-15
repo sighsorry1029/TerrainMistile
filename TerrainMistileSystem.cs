@@ -13,6 +13,7 @@ internal static class TerrainMistileSystem
     private const float FallbackEffectDestroyDelay = 20f;
     private const float ActiveTerrainMistileAreaRadius = 32f;
     private const float SpawnUnitSize = 32f;
+    private const float TerrainHeightDeformationCap = 8f;
     private const float SpawnUnitScanInterval = 1f;
     private const float SpawnUnitRollStateRetention = 600f;
     private const float NoModifiedTerrainCompRetention = 3f;
@@ -263,9 +264,10 @@ internal static class TerrainMistileSystem
         }
 
         LastSpawnRollTimeByUnit[unit.Key] = Time.time;
-        if (Random.value > rule.SpawnChance)
+        float effectiveSpawnChance = rule.GetEffectiveSpawnChance(unit.MaxDeformationPressure);
+        if (Random.value > effectiveSpawnChance)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile spawn roll failed for terrain unit {unit.Key} in {TerrainMistileSpawnRules.GetBiomeName(unit.Biome)}.");
+            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile spawn roll failed for terrain unit {unit.Key} in {TerrainMistileSpawnRules.GetBiomeName(unit.Biome)}. chance={effectiveSpawnChance:0.###}, deformationPressure={unit.MaxDeformationPressure:0.###}");
             return false;
         }
 
@@ -427,11 +429,13 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
+                float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
                 Vector3 unitCenter = GetSpawnUnitCenter(key);
-                float score = GetTargetSpreadScore(candidate, unitCenter);
+                float score = GetTargetSpreadScore(candidate, unitCenter, deformationPressure);
                 if (ModifiedTerrainUnits.TryGetValue(key, out ModifiedTerrainUnitCandidate unit))
                 {
                     unit.ModifiedCellCount++;
+                    unit.MaxDeformationPressure = Mathf.Max(unit.MaxDeformationPressure, deformationPressure);
                     if (score > unit.BestScore)
                     {
                         unit.TargetPoint = candidate;
@@ -447,6 +451,7 @@ internal static class TerrainMistileSystem
                     Biome = biome,
                     TargetPoint = candidate,
                     BestScore = score,
+                    MaxDeformationPressure = deformationPressure,
                     ModifiedCellCount = 1
                 };
             }
@@ -539,7 +544,8 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                float score = GetTargetSpreadScore(candidate, center);
+                float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
+                float score = GetTargetSpreadScore(candidate, center, deformationPressure);
                 if (!found || score > bestScore)
                 {
                     found = true;
@@ -556,6 +562,22 @@ internal static class TerrainMistileSystem
     {
         return index < terrainComp.m_modifiedHeight.Length &&
                (terrainComp.m_modifiedHeight[index] || terrainComp.m_levelDelta[index] != 0f || terrainComp.m_smoothDelta[index] != 0f);
+    }
+
+    private static float GetHeightDeformationPressure(TerrainComp terrainComp, int index)
+    {
+        float delta = 0f;
+        if (index < terrainComp.m_levelDelta.Length)
+        {
+            delta += terrainComp.m_levelDelta[index];
+        }
+
+        if (index < terrainComp.m_smoothDelta.Length)
+        {
+            delta += terrainComp.m_smoothDelta[index];
+        }
+
+        return Mathf.Clamp01(Mathf.Abs(delta) / TerrainHeightDeformationCap);
     }
 
     private static bool IsSpawnUnitWaitingForInterval(SpawnUnitKey key, TerrainMistileBiomeSpawnRule rule)
@@ -1244,7 +1266,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            float score = GetTargetSpreadScore(candidate, center);
+            float score = GetTargetSpreadScore(candidate, center, unit.MaxDeformationPressure);
             if (!found || score > bestScore)
             {
                 found = true;
@@ -1326,11 +1348,12 @@ internal static class TerrainMistileSystem
         return false;
     }
 
-    private static float GetTargetSpreadScore(Vector3 point, Vector3 center)
+    private static float GetTargetSpreadScore(Vector3 point, Vector3 center, float deformationPressure)
     {
         float nearestSuppressionGap = GetNearestSuppressionGap(point);
         float score = nearestSuppressionGap == float.MaxValue ? 0f : nearestSuppressionGap;
         score += Mathf.Min(HorizontalDistanceSqr(point, center), 4096f) * 0.001f;
+        score += Mathf.Clamp01(deformationPressure);
         score += Random.Range(0f, 0.25f);
         return score;
     }
@@ -1526,6 +1549,7 @@ internal static class TerrainMistileSystem
         public int Biome;
         public Vector3 TargetPoint;
         public float BestScore;
+        public float MaxDeformationPressure;
         public int ModifiedCellCount;
     }
 }

@@ -17,6 +17,7 @@ internal static class TerrainMistileSpawnRules
     private const float DefaultInterval = 60f;
     private const float DefaultPlayerSearchRadius = 32f;
     private const float DefaultSpawnChance = 0.25f;
+    private const float DefaultMaxDeformationSpawnChanceBonus = 0.25f;
     private const bool DefaultScaleSpawnsWithNearbyPlayers = true;
     private const int DefaultIgnorePlayerBaseBaseValue = 1;
     private const float DefaultBaseCheckRadius = 24f;
@@ -292,6 +293,13 @@ internal static class TerrainMistileSpawnRules
                     }
 
                     break;
+                case "maxdeformationspawnchancebonus":
+                    if (TryGetFloat(entry.Value, out float maxDeformationSpawnChanceBonus))
+                    {
+                        values.MaxDeformationSpawnChanceBonus = maxDeformationSpawnChanceBonus;
+                    }
+
+                    break;
                 case "maxspawn":
                     if (TryGetInt(entry.Value, out int maxSpawn))
                     {
@@ -516,6 +524,7 @@ internal static class TerrainMistileSpawnRules
         float interval = values.Interval ?? fallback.Interval;
         float playerSearchRadius = values.PlayerSearchRadius ?? fallback.PlayerSearchRadius;
         float spawnChance = values.SpawnChance ?? fallback.SpawnChance;
+        float maxDeformationSpawnChanceBonus = values.MaxDeformationSpawnChanceBonus ?? fallback.MaxDeformationSpawnChanceBonus;
         bool scaleSpawnsWithNearbyPlayers = values.PerPlayerSpawn ?? fallback.ScaleSpawnsWithNearbyPlayers;
         int ignorePlayerBaseBaseValue = values.PlayerBaseValue ?? fallback.IgnorePlayerBaseBaseValue;
         float baseCheckRadius = values.BaseCheckRadius ?? fallback.BaseCheckRadius;
@@ -550,6 +559,7 @@ internal static class TerrainMistileSpawnRules
         interval = Mathf.Clamp(interval, 0f, 3600f);
         playerSearchRadius = Mathf.Clamp(playerSearchRadius, 0f, 512f);
         spawnChance = Mathf.Clamp01(spawnChance);
+        maxDeformationSpawnChanceBonus = Mathf.Clamp01(maxDeformationSpawnChanceBonus);
         ignorePlayerBaseBaseValue = Mathf.Clamp(ignorePlayerBaseBaseValue, 0, 10);
         baseCheckRadius = Mathf.Clamp(baseCheckRadius, 0f, 128f);
         maxActiveTerrainMistilesPerArea = Mathf.Clamp(maxActiveTerrainMistilesPerArea, 0, 50);
@@ -567,6 +577,7 @@ internal static class TerrainMistileSpawnRules
             interval,
             playerSearchRadius,
             spawnChance,
+            maxDeformationSpawnChanceBonus,
             scaleSpawnsWithNearbyPlayers,
             ignorePlayerBaseBaseValue,
             baseCheckRadius,
@@ -604,6 +615,7 @@ internal static class TerrainMistileSpawnRules
             DefaultInterval,
             DefaultPlayerSearchRadius,
             DefaultSpawnChance,
+            DefaultMaxDeformationSpawnChanceBonus,
             DefaultScaleSpawnsWithNearbyPlayers,
             DefaultIgnorePlayerBaseBaseValue,
             DefaultBaseCheckRadius,
@@ -686,7 +698,8 @@ internal static class TerrainMistileSpawnRules
             "defaults:\n" +
             "  interval: 60 # Seconds between spawn rolls for one 32m terrain unit. 0 disables that biome.\n" +
             "  playerSearchRadius: 32 # Players within this horizontal radius of a changed terrain unit activate its rolls.\n" +
-            "  spawnChance: 0.25 # Chance used when the unit interval is ready and at least one player is nearby.\n" +
+            "  spawnChance: 0.25 # Base chance used when the unit interval is ready and at least one player is nearby.\n" +
+            "  maxDeformationSpawnChanceBonus: 0.25 # Added to spawnChance when the largest height deformation in the 32m terrain unit reaches the 8m cap. Scales linearly from 0m to 8m.\n" +
             "  maxSpawn: 3 # Maximum active TerrainMistiles with targets within 32m of the target. 0 disables that biome.\n" +
             "  perPlayerSpawn: true # If true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by maxSpawn and available targets.\n" +
             "  playerBaseValue: 1 # playerBaseValue N skips spawn checks when at least N unique listed player-placed base prefab types are within baseCheckRadius meters horizontally of the changed terrain. 0 disables the PlayerBase check.\n" +
@@ -740,6 +753,7 @@ internal static class TerrainMistileSpawnRules
         public float? Interval { get; set; }
         public float? PlayerSearchRadius { get; set; }
         public float? SpawnChance { get; set; }
+        public float? MaxDeformationSpawnChanceBonus { get; set; }
         public int? MaxSpawn { get; set; }
         public bool? PerPlayerSpawn { get; set; }
         public int? PlayerBaseValue { get; set; }
@@ -1003,6 +1017,7 @@ internal readonly struct TerrainMistileBiomeSpawnRule
         float interval,
         float playerSearchRadius,
         float spawnChance,
+        float maxDeformationSpawnChanceBonus,
         bool scaleSpawnsWithNearbyPlayers,
         int ignorePlayerBaseBaseValue,
         float baseCheckRadius,
@@ -1017,6 +1032,7 @@ internal readonly struct TerrainMistileBiomeSpawnRule
         Interval = interval;
         PlayerSearchRadius = playerSearchRadius;
         SpawnChance = spawnChance;
+        MaxDeformationSpawnChanceBonus = maxDeformationSpawnChanceBonus;
         ScaleSpawnsWithNearbyPlayers = scaleSpawnsWithNearbyPlayers;
         IgnorePlayerBaseBaseValue = ignorePlayerBaseBaseValue;
         BaseCheckRadius = baseCheckRadius;
@@ -1032,6 +1048,7 @@ internal readonly struct TerrainMistileBiomeSpawnRule
     public float Interval { get; }
     public float PlayerSearchRadius { get; }
     public float SpawnChance { get; }
+    public float MaxDeformationSpawnChanceBonus { get; }
     public bool ScaleSpawnsWithNearbyPlayers { get; }
     public int IgnorePlayerBaseBaseValue { get; }
     public float BaseCheckRadius { get; }
@@ -1042,10 +1059,15 @@ internal readonly struct TerrainMistileBiomeSpawnRule
     public float ResetRadius { get; }
     public float Health { get; }
     public Color VisualColor { get; }
-    public bool Enabled => Interval > 0f && PlayerSearchRadius > 0f && SpawnChance > 0f && MaxActiveTerrainMistilesPerArea > 0;
+    public bool Enabled => Interval > 0f && PlayerSearchRadius > 0f && (SpawnChance > 0f || MaxDeformationSpawnChanceBonus > 0f) && MaxActiveTerrainMistilesPerArea > 0;
+
+    public float GetEffectiveSpawnChance(float deformationPressure)
+    {
+        return Mathf.Clamp01(SpawnChance + MaxDeformationSpawnChanceBonus * Mathf.Clamp01(deformationPressure));
+    }
 
     public override string ToString()
     {
-        return $"interval={Interval:0.##}, playerSearchRadius={PlayerSearchRadius:0.##}, spawnChance={SpawnChance:0.###}, maxActive={MaxActiveTerrainMistilesPerArea}, playerBaseValue={IgnorePlayerBaseBaseValue}, baseCheckRadius={BaseCheckRadius:0.##}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
+        return $"interval={Interval:0.##}, playerSearchRadius={PlayerSearchRadius:0.##}, spawnChance={SpawnChance:0.###}, maxDeformationSpawnChanceBonus={MaxDeformationSpawnChanceBonus:0.###}, maxActive={MaxActiveTerrainMistilesPerArea}, playerBaseValue={IgnorePlayerBaseBaseValue}, baseCheckRadius={BaseCheckRadius:0.##}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
     }
 }
