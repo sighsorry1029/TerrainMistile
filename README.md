@@ -24,6 +24,12 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.
 - TerrainMistiles use nonblocking colliders so terrain and pieces do not trap them before impact.
 
+## BepInEx Config
+
+- `Lock Configuration`: server admin config lock.
+- `Debug Logging`: local diagnostic logging for this client/server. Not synced.
+- `Display Name`: in-game name shown to players. Default: `Earth Warden`.
+
 ## TerrainMistile.yml
 
 - Main spawn rule file.

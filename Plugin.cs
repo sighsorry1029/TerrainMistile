@@ -27,6 +27,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private readonly Harmony _harmony = new(ModGUID);
     public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     private static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
+    internal static bool DebugLoggingEnabled => _debugLogging?.Value == Toggle.On;
     internal static string DisplayName
     {
         get
@@ -40,6 +41,8 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private readonly object _reloadLock = new();
     private DateTime _lastConfigReloadTime;
     private DateTime _lastSpawnRulesReloadTime;
+    private string? _lastConfigFileText;
+    private string? _lastSpawnRulesYamlText;
     private const long RELOAD_DELAY = 10000000; // One second
 
     public enum Toggle
@@ -54,6 +57,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         Config.SaveOnConfigSet = false;
 
         _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
+        _debugLogging = config("1 - General", "Debug Logging", Toggle.Off, "If on, writes extra TerrainMistile diagnostic logs on this client/server.", synchronizedSetting: false);
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
         _displayName = config("2 - Display", "Display Name", DefaultDisplayName, "In-game name shown to players for TerrainMistile.");
 
@@ -76,6 +80,8 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         }
 
         Config.Save();
+        _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
+        _lastSpawnRulesYamlText = ReadFileTextIfExists(SpawnRulesFileFullPath);
         if (saveOnSet)
         {
             Config.SaveOnConfigSet = saveOnSet;
@@ -95,6 +101,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private void Update()
     {
         TerrainMistileSystem.UpdateResetEffectRpcRegistration();
+        TerrainMistileSystem.UpdateProtectedTerrainAreaSync();
         TerrainMistileExternalTerrainCompat.Update();
         TerrainMistileSystem.UpdatePersistentTerrainSpawns();
     }
@@ -137,8 +144,15 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
             try
             {
+                string configFileText = File.ReadAllText(ConfigFileFullPath);
+                if (string.Equals(_lastConfigFileText, configFileText, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 TerrainMistileLogger.LogDebug("Reloading configuration...");
                 SaveWithRespectToConfigSet(true);
+                _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
                 TerrainMistileLogger.LogInfo("Configuration reload complete.");
             }
             catch (Exception ex)
@@ -191,15 +205,34 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     {
         TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
         string yaml = File.ReadAllText(SpawnRulesFileFullPath);
+        if (string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal) &&
+            string.Equals(SpawnRulesYaml.Value ?? string.Empty, yaml, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         if (TerrainMistileSpawnRules.LoadYamlText(yaml, "local file"))
         {
-            SpawnRulesYaml.Value = yaml;
+            _lastSpawnRulesYamlText = yaml;
+            if (!string.Equals(SpawnRulesYaml.Value ?? string.Empty, yaml, StringComparison.Ordinal))
+            {
+                SpawnRulesYaml.Value = yaml;
+            }
         }
     }
 
     private void OnSyncedSpawnRulesYamlChanged()
     {
-        TerrainMistileSpawnRules.LoadYamlText(SpawnRulesYaml.Value ?? string.Empty, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync");
+        string yaml = SpawnRulesYaml.Value ?? string.Empty;
+        if (string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (TerrainMistileSpawnRules.LoadYamlText(yaml, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync"))
+        {
+            _lastSpawnRulesYamlText = yaml;
+        }
     }
 
     private void OnSourceOfTruthChanged(bool isSourceOfTruth)
@@ -210,7 +243,25 @@ public class TerrainMistilePlugin : BaseUnityPlugin
             return;
         }
 
-        TerrainMistileSpawnRules.LoadYamlText(SpawnRulesYaml.Value ?? string.Empty, "server sync");
+        string yaml = SpawnRulesYaml.Value ?? string.Empty;
+        if (!string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal) &&
+            TerrainMistileSpawnRules.LoadYamlText(yaml, "server sync"))
+        {
+            _lastSpawnRulesYamlText = yaml;
+        }
+    }
+
+    private static string? ReadFileTextIfExists(string path)
+    {
+        return File.Exists(path) ? File.ReadAllText(path) : null;
+    }
+
+    internal static void LogDebugDiagnostic(string message)
+    {
+        if (DebugLoggingEnabled)
+        {
+            TerrainMistileLogger.LogInfo($"[Debug] {message}");
+        }
     }
 
     private void SaveWithRespectToConfigSet(bool reload = false)
@@ -230,6 +281,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     #region ConfigOptions
 
     private static ConfigEntry<Toggle> _serverConfigLocked = null!;
+    private static ConfigEntry<Toggle> _debugLogging = null!;
     private static ConfigEntry<string> _displayName = null!;
     internal static CustomSyncedValue<string> SpawnRulesYaml = null!;
 
