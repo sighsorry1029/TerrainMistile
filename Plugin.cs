@@ -15,7 +15,7 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.1";
+    internal const string ModVersion = "1.0.2";
     internal const string Author = "sighsorry";
     internal const string DefaultDisplayName = "Earth Warden";
     private const string ModGUID = $"{Author}.{ModName}";
@@ -27,7 +27,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private readonly Harmony _harmony = new(ModGUID);
     public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     private static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
-    internal static bool DebugLoggingEnabled => _debugLogging?.Value == Toggle.On;
     internal static string DisplayName
     {
         get
@@ -57,7 +56,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         Config.SaveOnConfigSet = false;
 
         _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
-        _debugLogging = config("1 - General", "Debug Logging", Toggle.Off, "If on, writes extra TerrainMistile diagnostic logs on this client/server.", synchronizedSetting: false);
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
         _displayName = config("2 - Display", "Display Name", DefaultDisplayName, "In-game name shown to players for TerrainMistile.");
 
@@ -150,7 +148,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
                     return;
                 }
 
-                TerrainMistileLogger.LogDebug("Reloading configuration...");
                 SaveWithRespectToConfigSet(true);
                 _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
                 TerrainMistileLogger.LogInfo("Configuration reload complete.");
@@ -183,7 +180,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
             if (!ConfigSync.IsSourceOfTruth)
             {
-                TerrainMistileLogger.LogDebug("Ignoring local TerrainMistile spawn rules YAML change while server data is authoritative.");
                 return;
             }
 
@@ -256,14 +252,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 
-    internal static void LogDebugDiagnostic(string message)
-    {
-        if (DebugLoggingEnabled)
-        {
-            TerrainMistileLogger.LogInfo($"[Debug] {message}");
-        }
-    }
-
     private void SaveWithRespectToConfigSet(bool reload = false)
     {
         bool originalSaveOnSet = Config.SaveOnConfigSet;
@@ -281,7 +269,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     #region ConfigOptions
 
     private static ConfigEntry<Toggle> _serverConfigLocked = null!;
-    private static ConfigEntry<Toggle> _debugLogging = null!;
     private static ConfigEntry<string> _displayName = null!;
     internal static CustomSyncedValue<string> SpawnRulesYaml = null!;
 

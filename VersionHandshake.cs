@@ -10,7 +10,6 @@ public static class RegisterAndCheckVersion
     private static void Prefix(ZNetPeer peer, ref ZNet __instance)
     {
         // Register version check call
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug("Registering version RPC handler");
         peer.m_rpc.Register($"{TerrainMistilePlugin.ModName}_VersionCheck", new Action<ZRpc, ZPackage>(RpcHandlers.RPC_TerrainMistile_Version));
 
         // Make calls to check versions

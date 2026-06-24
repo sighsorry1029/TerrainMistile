@@ -146,10 +146,6 @@ internal static class TerrainMistileSystem
 
         _nextProtectedTerrainAreaRequestTime = Time.time + ProtectedTerrainAreaRequestRetryInterval;
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.instance.GetServerPeerID(), RequestProtectedTerrainAreasRpcName, new ZPackage());
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic("Requested protected terrain area sync from server.");
-        }
     }
 
     internal static void ResetTerrainAround(Vector3 center, float radius, bool resetPaint)
@@ -187,7 +183,6 @@ internal static class TerrainMistileSystem
 
                 if (!terrainComp.IsOwner())
                 {
-                    TerrainMistilePlugin.TerrainMistileLogger.LogDebug("Skipping terrain reset because this peer does not own the TerrainComp.");
                     continue;
                 }
 
@@ -217,11 +212,6 @@ internal static class TerrainMistileSystem
             }
 
             TerrainMistilePlugin.TerrainMistileLogger.LogInfo($"TerrainMistile reset {changedCells} terrain cells around {center}.");
-            if (TerrainMistilePlugin.DebugLoggingEnabled)
-            {
-                TerrainMistilePlugin.LogDebugDiagnostic(
-                    $"Terrain reset summary center={FormatPoint(center)}, radius={radius:0.##}, changedCells={changedCells}, protectedSkippedCells={protectedSkippedCells}, {DescribeTerrainProtection(center)}");
-            }
         }
         finally
         {
@@ -250,7 +240,7 @@ internal static class TerrainMistileSystem
 
                 Vector3 cellPoint = new(worldX, center.y, worldZ);
                 int index = GetTerrainCellIndex(width, x, y);
-                if (IsProtectedTerrainArea(cellPoint, logSkip: false))
+                if (IsProtectedTerrainArea(cellPoint))
                 {
                     if (IsResettableTerrainCell(terrainComp, index, resetPaint))
                     {
@@ -346,14 +336,8 @@ internal static class TerrainMistileSystem
 
         LastSpawnRollTimeByUnit[unit.Key] = Time.time;
         float effectiveSpawnChance = rule.GetEffectiveSpawnChance(unit.MaxDeformationPressure);
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"TerrainMistile spawn roll unit={unit.Key}, target={FormatPoint(unit.TargetPoint)}, chance={effectiveSpawnChance:0.###}, deformationPressure={unit.MaxDeformationPressure:0.###}, nearbyPlayers={TempNearbyPlayers.Count}, activeNearTarget={activeCount}, {DescribeTerrainProtection(unit.TargetPoint)}");
-        }
         if (Random.value > effectiveSpawnChance)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile spawn roll failed for terrain unit {unit.Key} in {TerrainMistileSpawnRules.GetBiomeName(unit.Biome)}. chance={effectiveSpawnChance:0.###}, deformationPressure={unit.MaxDeformationPressure:0.###}");
             return false;
         }
 
@@ -393,11 +377,6 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (TerrainMistilePlugin.DebugLoggingEnabled)
-            {
-                TerrainMistilePlugin.LogDebugDiagnostic(
-                    $"TerrainMistile spawn selected target={FormatPoint(terrainTarget)}, spawnPoint={FormatPoint(spawnPoint)}, resetRadius={targetRule.ResetRadius:0.##}, {DescribeTerrainProtection(terrainTarget)}");
-            }
             spawnedAny |= SpawnTerrainMistile(spawnPlayer, spawnPoint, terrainTarget, targetRule.ResetRadius, targetRule.Health);
         }
 
@@ -514,7 +493,7 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
+                if (!IsEligibleModifiedTerrainTarget(candidate, rule))
                 {
                     continue;
                 }
@@ -626,7 +605,7 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
+                if (!IsEligibleModifiedTerrainTarget(candidate, rule))
                 {
                     continue;
                 }
@@ -672,24 +651,24 @@ internal static class TerrainMistileSystem
         return LastSpawnRollTimeByUnit.TryGetValue(key, out float lastSpawnRoll) && Time.time - lastSpawnRoll < rule.Interval;
     }
 
-    private static bool IsEligibleModifiedTerrainTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip)
+    private static bool IsEligibleModifiedTerrainTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule)
     {
-        if (IsIgnoredByExternalTerrain(point, logSkip))
+        if (IsIgnoredByExternalTerrain(point))
         {
             return false;
         }
 
-        if (IsProtectedTerrainArea(point, logSkip))
+        if (IsProtectedTerrainArea(point))
         {
             return false;
         }
 
-        if (IsIgnoredByPlayerBase(point, rule, logSkip))
+        if (IsIgnoredByPlayerBase(point, rule))
         {
             return false;
         }
 
-        if (IsTargetSuppressedWithoutCleanup(point, logSkip))
+        if (IsTargetSuppressedWithoutCleanup(point))
         {
             return false;
         }
@@ -697,7 +676,7 @@ internal static class TerrainMistileSystem
         return true;
     }
 
-    private static bool IsIgnoredByPlayerBase(Vector3 point, TerrainMistileBiomeSpawnRule rule, bool logSkip)
+    private static bool IsIgnoredByPlayerBase(Vector3 point, TerrainMistileBiomeSpawnRule rule)
     {
         int threshold = rule.IgnorePlayerBaseBaseValue;
         if (threshold <= 0 || rule.BaseCheckRadius <= 0f)
@@ -709,11 +688,6 @@ internal static class TerrainMistileSystem
         if (baseValue < threshold)
         {
             return false;
-        }
-
-        if (logSkip)
-        {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile spawn roll at {point}; unique player base prefab count {baseValue} >= configured threshold {threshold} within {rule.BaseCheckRadius:0.##}m.");
         }
 
         return true;
@@ -911,11 +885,6 @@ internal static class TerrainMistileSystem
 
         BroadcastProtectedTerrainAreas();
         _protectedTerrainAreasDirty = false;
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"Protected terrain area sync requested by peer={sender}; sent count={ProtectedTerrainAreas.Count}.");
-        }
     }
 
     private static void RPC_ProtectedTerrainAreas(long sender, ZPackage package)
@@ -949,11 +918,6 @@ internal static class TerrainMistileSystem
 
             MarkProtectedTerrainAreaBucketsDirty();
             _protectedTerrainAreasClientSynced = true;
-            if (TerrainMistilePlugin.DebugLoggingEnabled)
-            {
-                TerrainMistilePlugin.LogDebugDiagnostic(
-                    $"Received protected terrain area sync from peer={sender}; protectedCount={ProtectedTerrainAreas.Count}.");
-            }
         }
         catch (Exception ex)
         {
@@ -978,10 +942,6 @@ internal static class TerrainMistileSystem
         }
 
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, ProtectedTerrainAreasRpcName, package);
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic($"Broadcast protected terrain area sync. protectedCount={ProtectedTerrainAreas.Count}.");
-        }
     }
 
     private static void CreateResetEffectsLocal(Vector3 center, string vfxPrefab, string sfxPrefab)
@@ -1034,8 +994,6 @@ internal static class TerrainMistileSystem
         {
             behaviour.Initialize(target, terrainOperationPoint, resetRadius, health);
         }
-
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Spawned {TerrainMistilePrefab.PrefabName} near {target.GetPlayerName()}.");
 
         return true;
     }
@@ -1220,9 +1178,6 @@ internal static class TerrainMistileSystem
             Source = source,
             ExpireTime = expireTime
         });
-
-        string duration = durationSeconds > 0f ? $" for {durationSeconds:0.#}s" : "";
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Ignoring TerrainMistile reactions for {source} at {center}, radius {radius:0.##}{duration}.");
     }
 
     internal static void ClearProtectedTerrainAreas(string sourcePrefix)
@@ -1244,12 +1199,6 @@ internal static class TerrainMistileSystem
 
         if (removed > 0)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Cleared {removed} TerrainMistile protected terrain area(s) for source prefix '{sourcePrefix}'.");
-            if (TerrainMistilePlugin.DebugLoggingEnabled)
-            {
-                TerrainMistilePlugin.LogDebugDiagnostic($"Cleared {removed} protected terrain area(s) for sourcePrefix='{sourcePrefix}'.");
-            }
-
             MarkProtectedTerrainAreasDirty();
         }
     }
@@ -1274,14 +1223,6 @@ internal static class TerrainMistileSystem
             float previousRadius = area.Radius;
             area.Center = center;
             area.Radius = Mathf.Max(area.Radius, radius);
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug(
-                $"Updated TerrainMistile protected terrain area for {source} at {FormatPoint(center)}, radius {previousRadius:0.##}->{area.Radius:0.##}. ProtectedCount={ProtectedTerrainAreas.Count}.");
-            if (TerrainMistilePlugin.DebugLoggingEnabled)
-            {
-                TerrainMistilePlugin.LogDebugDiagnostic(
-                    $"Updated protected terrain area source='{source}', center={FormatPoint(center)}, radius {previousRadius:0.##}->{area.Radius:0.##}, protectedCount={ProtectedTerrainAreas.Count}.");
-            }
-
             MarkProtectedTerrainAreasDirty();
             return;
         }
@@ -1292,14 +1233,6 @@ internal static class TerrainMistileSystem
             Radius = radius,
             Source = source
         });
-
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug(
-            $"Registered TerrainMistile protected terrain area for {source} at {FormatPoint(center)}, radius {radius:0.##}. ProtectedCount={ProtectedTerrainAreas.Count}.");
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"Registered protected terrain area source='{source}', center={FormatPoint(center)}, radius={radius:0.##}, protectedCount={ProtectedTerrainAreas.Count}.");
-        }
 
         MarkProtectedTerrainAreasDirty();
     }
@@ -1323,17 +1256,15 @@ internal static class TerrainMistileSystem
             location.m_exteriorRadius + LocationTerrainProtectionPadding,
             $"location load terrain {location.m_prefabName}",
             LocationTerrainIgnoreDuration);
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug(
-            $"Registered TerrainMistile location load grace for {location.m_prefabName} at {FormatPoint(position)}, radius {location.m_exteriorRadius + LocationTerrainProtectionPadding:0.##}, duration {LocationTerrainIgnoreDuration:0.#}s.");
     }
 
-    private static bool IsIgnoredByExternalTerrain(Vector3 point, bool logSkip)
+    private static bool IsIgnoredByExternalTerrain(Vector3 point)
     {
         CleanupExternalTerrainIgnoreAreas();
-        return IsIgnoredByTerrainAreas(point, ExternalTerrainIgnoreAreas, logSkip);
+        return IsIgnoredByTerrainAreas(point, ExternalTerrainIgnoreAreas);
     }
 
-    private static bool IsProtectedTerrainArea(Vector3 point, bool logSkip)
+    private static bool IsProtectedTerrainArea(Vector3 point)
     {
         if (ProtectedTerrainAreas.Count == 0)
         {
@@ -1354,54 +1285,10 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (logSkip)
-            {
-                TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile terrain reaction at {point}; inside {area.Source} ignore area near {area.Center}.");
-            }
-
             return true;
         }
 
         return false;
-    }
-
-    internal static string DescribeTerrainProtection(Vector3 point)
-    {
-        CleanupExternalTerrainIgnoreAreas();
-        return $"ProtectedAreas={ProtectedTerrainAreas.Count} {DescribeNearestTerrainArea(point, ProtectedTerrainAreas, includeExpiry: false)}; " +
-               $"TemporaryIgnoreAreas={ExternalTerrainIgnoreAreas.Count} {DescribeNearestTerrainArea(point, ExternalTerrainIgnoreAreas, includeExpiry: true)}.";
-    }
-
-    internal static string FormatPoint(Vector3 point)
-    {
-        return $"({point.x:0.##}, {point.y:0.##}, {point.z:0.##})";
-    }
-
-    private static string DescribeNearestTerrainArea(Vector3 point, List<ExternalTerrainIgnoreArea> areas, bool includeExpiry)
-    {
-        if (areas.Count == 0)
-        {
-            return "nearest=none";
-        }
-
-        ExternalTerrainIgnoreArea nearest = areas[0];
-        float nearestDistanceSqr = HorizontalDistanceSqr(point, nearest.Center);
-        for (int i = 1; i < areas.Count; i++)
-        {
-            float distanceSqr = HorizontalDistanceSqr(point, areas[i].Center);
-            if (distanceSqr >= nearestDistanceSqr)
-            {
-                continue;
-            }
-
-            nearest = areas[i];
-            nearestDistanceSqr = distanceSqr;
-        }
-
-        float distance = Mathf.Sqrt(nearestDistanceSqr);
-        float gap = distance - nearest.Radius;
-        string expiry = includeExpiry && nearest.ExpireTime > 0f ? $", remaining={Mathf.Max(0f, nearest.ExpireTime - Time.time):0.#}s" : "";
-        return $"nearest='{nearest.Source}', center={FormatPoint(nearest.Center)}, radius={nearest.Radius:0.##}, distance={distance:0.##}, gap={gap:0.##}{expiry}";
     }
 
     private static void CleanupExternalTerrainIgnoreAreas()
@@ -1457,11 +1344,6 @@ internal static class TerrainMistileSystem
         }
 
         _protectedTerrainAreaBucketsDirty = false;
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"Rebuilt protected terrain area buckets. protectedCount={ProtectedTerrainAreas.Count}, bucketCount={ProtectedTerrainAreasByBucket.Count}.");
-        }
     }
 
     private static TerrainAreaBucketKey GetTerrainAreaBucketKey(Vector3 point)
@@ -1484,18 +1366,13 @@ internal static class TerrainMistileSystem
         return Mathf.Max(currentExpireTime, newExpireTime);
     }
 
-    private static bool IsIgnoredByTerrainAreas(Vector3 point, List<ExternalTerrainIgnoreArea> areas, bool logSkip)
+    private static bool IsIgnoredByTerrainAreas(Vector3 point, List<ExternalTerrainIgnoreArea> areas)
     {
         foreach (ExternalTerrainIgnoreArea area in areas)
         {
             if (HorizontalDistanceSqr(point, area.Center) > area.Radius * area.Radius)
             {
                 continue;
-            }
-
-            if (logSkip)
-            {
-                TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile terrain reaction at {point}; inside {area.Source} ignore area near {area.Center}.");
             }
 
             return true;
@@ -1537,7 +1414,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (!IsEligibleModifiedTerrainTarget(candidate, rule, logSkip: false))
+            if (!IsEligibleModifiedTerrainTarget(candidate, rule))
             {
                 continue;
             }
@@ -1593,7 +1470,7 @@ internal static class TerrainMistileSystem
                 if (IsWithinHorizontalRadius(worldX, worldZ, center, radiusSqr))
                 {
                     Vector3 cellPoint = new(worldX, center.y, worldZ);
-                    if (IsProtectedTerrainArea(cellPoint, logSkip: false))
+                    if (IsProtectedTerrainArea(cellPoint))
                     {
                         continue;
                     }
@@ -1606,18 +1483,13 @@ internal static class TerrainMistileSystem
         return false;
     }
 
-    private static bool IsTargetSuppressedWithoutCleanup(Vector3 point, bool logSkip)
+    private static bool IsTargetSuppressedWithoutCleanup(Vector3 point)
     {
         foreach (TargetReservation reservation in TargetReservations)
         {
             if (HorizontalDistanceSqr(point, reservation.Point) > reservation.Radius * reservation.Radius)
             {
                 continue;
-            }
-
-            if (logSkip)
-            {
-                TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile spawn roll at {point}; target is already reserved near {reservation.Point}.");
             }
 
             return true;

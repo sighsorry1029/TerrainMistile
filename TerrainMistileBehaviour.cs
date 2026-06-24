@@ -101,8 +101,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
         {
             _nview.GetZDO().Set(SelfDestructZdoKey, true);
         }
-
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Marked TerrainMistile self-destruct from {reason}.");
     }
 
     private void ApplyIdentity()
@@ -363,12 +361,10 @@ public class TerrainMistileBehaviour : MonoBehaviour
         TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
         if (TerrainMistileSystem.TryFindReplacementTerrainTarget(transform.position, out Vector3 replacementTarget))
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile target at {_terrainTarget} was already reset; retargeting to {replacementTarget}.");
             SetTerrainTarget(replacementTarget, TerrainMistileSystem.GetResetRadiusForPoint(replacementTarget));
             return true;
         }
 
-        TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"TerrainMistile target at {_terrainTarget} was already reset and no replacement target was found; destroying without terrain reset.");
         DestroyWithoutTerrainReset();
         return true;
     }
@@ -414,7 +410,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
 
         if (!_selfDestructTriggered)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogDebug($"Skipping TerrainMistile terrain reset on {reason}; self-destruct was not detected.");
             return;
         }
 

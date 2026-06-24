@@ -74,7 +74,6 @@ internal static class TerrainMistileExternalTerrainCompat
         MethodInfo? patch = AccessTools.Method(typeof(TerrainMistileExternalTerrainCompat), nameof(HandleTerrainPrefix));
         if (target == null || patch == null)
         {
-            _logger?.LogDebug("Expand World Data terrain compat skipped: HandleTerrain was not found.");
             return;
         }
 
@@ -100,7 +99,6 @@ internal static class TerrainMistileExternalTerrainCompat
         MethodInfo? patch = AccessTools.Method(typeof(TerrainMistileExternalTerrainCompat), nameof(BlueprintProtectionSyncPostfix));
         if (target == null || patch == null)
         {
-            _logger?.LogDebug("Expand World Data noBuild compat skipped: NoBuildManager.UpdateData was not found.");
             return;
         }
 
@@ -126,7 +124,6 @@ internal static class TerrainMistileExternalTerrainCompat
     private static void HandleTerrainPrefix(Vector3 pos, float radius, bool isBlueprint, object data)
     {
         string prefab = GetString(data, "prefab");
-        string noBuild = GetString(data, "noBuild").Trim();
         float ignoreRadius = GetTerrainRadius(radius, isBlueprint, data);
         if (ignoreRadius > 0f)
         {
@@ -135,16 +132,6 @@ internal static class TerrainMistileExternalTerrainCompat
 
         float noBuildRadius = GetNoBuildRadius(data, Mathf.Max(GetFloat(data, "exteriorRadius"), radius));
         float protectedRadius = Mathf.Max(ignoreRadius, radius, GetFloat(data, "exteriorRadius"), noBuildRadius) + TerrainMistileSystem.LocationTerrainProtectionPadding;
-        _logger?.LogDebug(
-            $"EWD terrain compat HandleTerrain prefab='{prefab}', isBlueprint={isBlueprint}, pos={TerrainMistileSystem.FormatPoint(pos)}, inputRadius={radius:0.##}, " +
-            $"terrainRadius={ignoreRadius:0.##}, noBuild='{noBuild}', noBuildRadius={noBuildRadius:0.##}, protectedRadius={protectedRadius:0.##}.");
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"EWD HandleTerrain prefab='{prefab}', isBlueprint={isBlueprint}, pos={TerrainMistileSystem.FormatPoint(pos)}, inputRadius={radius:0.##}, " +
-                $"terrainRadius={ignoreRadius:0.##}, noBuild='{noBuild}', noBuildRadius={noBuildRadius:0.##}, protectedRadius={protectedRadius:0.##}, willRegisterProtected={isBlueprint}.");
-        }
-
         if (isBlueprint)
         {
             TerrainMistileSystem.RegisterProtectedTerrainArea(pos, protectedRadius, $"{BlueprintProtectedSourcePrefix} {prefab}");
@@ -161,13 +148,10 @@ internal static class TerrainMistileExternalTerrainCompat
         ZoneSystem zoneSystem = ZoneSystem.instance;
         if (!zoneSystem)
         {
-            _logger?.LogDebug("EWD blueprint protected terrain sync skipped. HasZoneSystem=false.");
             return;
         }
 
         TerrainMistileSystem.ClearProtectedTerrainAreas(BlueprintProtectedSourcePrefix);
-        int checkedLocations = 0;
-        int registered = 0;
         foreach (ZoneSystem.LocationInstance locationInstance in zoneSystem.m_locationInstances.Values)
         {
             if (locationInstance.m_location == null)
@@ -183,7 +167,6 @@ internal static class TerrainMistileExternalTerrainCompat
                 continue;
             }
 
-            checkedLocations++;
             object? data = TryGetLocationYaml(locationInstance.m_location, out object? locationYaml) ? locationYaml : null;
             float terrainRadius = data == null ? 0f : GetTerrainRadius(locationInstance.m_location.m_exteriorRadius, isBlueprint: true, data);
             float noBuildRadius = data == null ? 0f : GetNoBuildRadius(data, locationInstance.m_location.m_exteriorRadius);
@@ -193,15 +176,6 @@ internal static class TerrainMistileExternalTerrainCompat
                 locationInstance.m_position,
                 protectedRadius,
                 $"{BlueprintProtectedSourcePrefix} {prefab}");
-            registered++;
-        }
-
-        _logger?.LogDebug(
-            $"EWD blueprint protected terrain sync complete. matchedLocations={checkedLocations}, protectedRegistered={registered}.");
-        if (TerrainMistilePlugin.DebugLoggingEnabled)
-        {
-            TerrainMistilePlugin.LogDebugDiagnostic(
-                $"EWD blueprint protected terrain sync complete. matchedLocations={checkedLocations}, protectedRegistered={registered}.");
         }
     }
 

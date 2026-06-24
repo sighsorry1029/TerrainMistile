@@ -27,7 +27,6 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 ## BepInEx Config
 
 - `Lock Configuration`: server admin config lock.
-- `Debug Logging`: local diagnostic logging for this client/server. Not synced.
 - `Display Name`: in-game name shown to players. Default: `Earth Warden`.
 
 ## TerrainMistile.yml
