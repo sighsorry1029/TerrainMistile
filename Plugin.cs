@@ -15,7 +15,7 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.2";
+    internal const string ModVersion = "1.0.3";
     internal const string Author = "sighsorry";
     internal const string DefaultDisplayName = "Earth Warden";
     private const string ModGUID = $"{Author}.{ModName}";
@@ -23,10 +23,15 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private static string ConfigFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + ConfigFileName;
     private static string SpawnRulesFileName = $"{ModName}.yml";
     internal static string SpawnRulesFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + SpawnRulesFileName;
-    internal static string ConnectionError = "";
     private readonly Harmony _harmony = new(ModGUID);
     public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
-    private static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
+    private static readonly ConfigSync ConfigSync = new(ModGUID)
+    {
+        DisplayName = ModName,
+        CurrentVersion = ModVersion,
+        MinimumRequiredVersion = ModVersion,
+        ModRequired = true
+    };
     internal static string DisplayName
     {
         get

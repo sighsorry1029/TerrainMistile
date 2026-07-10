@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace TerrainMistile;
@@ -5,11 +6,9 @@ namespace TerrainMistile;
 public class TerrainMistileBehaviour : MonoBehaviour
 {
     internal const string SelfDestructZdoKey = "TerrainMistileSelfDestruct";
-    internal const string TerrainMistileZdoKey = "TerrainMistile";
     internal const string TerrainSourceZdoKey = "TerrainMistileSource";
     internal const string TerrainSourceSetZdoKey = "TerrainMistileSourceSet";
     internal const string ResetRadiusZdoKey = "TerrainMistileResetRadius";
-    internal const string HealthZdoKey = "TerrainMistileHealth";
     internal const string VisualColorZdoKey = "TerrainMistileVisualColor";
     internal const string VisualColorSetZdoKey = "TerrainMistileVisualColorSet";
     private const float TerrainImpactDistance = 1.25f;
@@ -25,8 +24,10 @@ public class TerrainMistileBehaviour : MonoBehaviour
     private bool _hasTerrainTarget;
     private bool _selfDestructTriggered;
     private bool _terrainResetDone;
+    private bool _terrainResetInProgress;
     private bool _visualColorApplied;
     private float _nextVisualSyncTime;
+    private readonly List<Material> _ownedVisualMaterials = new();
 
     private void Awake()
     {
@@ -53,11 +54,8 @@ public class TerrainMistileBehaviour : MonoBehaviour
             _character.m_onDeath -= OnDeath;
         }
 
-        if (_hasTerrainTarget)
-        {
-            TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
-        }
-
+        TerrainMistilePrefab.ReleaseVisualMaterials(_ownedVisualMaterials);
+        ReleaseCurrentTerrainTarget();
         TerrainMistileSystem.UnregisterActiveTerrainMistile(this);
     }
 
@@ -70,9 +68,6 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        ApplyIdentity();
-        ConfigureTerrainSeeker();
-
         if (!TryLoadTerrainTarget())
         {
             return;
@@ -81,20 +76,15 @@ public class TerrainMistileBehaviour : MonoBehaviour
         MoveTowardTerrainTarget();
     }
 
-    internal void Initialize(Player target, Vector3 terrainOperationPoint, float resetRadius, float health)
+    internal void Initialize(Vector3 terrainOperationPoint, float resetRadius, float health)
     {
         ApplyIdentity();
         ConfigureTerrainSeeker();
         ApplyHealth(health);
         SetTerrainTarget(terrainOperationPoint, resetRadius);
-
-        if (_nview && _nview.IsValid() && _nview.IsOwner())
-        {
-            _nview.GetZDO().Set(TerrainMistileZdoKey, true);
-        }
     }
 
-    internal void MarkSelfDestruct(string reason = "self-destruct")
+    internal void MarkSelfDestruct()
     {
         _selfDestructTriggered = true;
         if (_nview && _nview.IsValid() && _nview.IsOwner())
@@ -126,17 +116,11 @@ public class TerrainMistileBehaviour : MonoBehaviour
         health = Mathf.Max(1f, health);
         _character.SetMaxHealth(health);
         _character.SetHealth(health);
-
-        ZDO zdo = _nview.GetZDO();
-        if (zdo != null)
-        {
-            zdo.Set(HealthZdoKey, health);
-        }
     }
 
     private void ApplyVisualColor(Color color, bool syncToZdo)
     {
-        TerrainMistilePrefab.ApplyVisuals(gameObject, color);
+        TerrainMistilePrefab.ApplyVisuals(gameObject, color, _ownedVisualMaterials);
         _visualColorApplied = true;
 
         if (!syncToZdo || !_nview || !_nview.IsValid() || !_nview.IsOwner())
@@ -209,11 +193,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
 
     private void SetTerrainTarget(Vector3 terrainOperationPoint, float resetRadius)
     {
-        if (_hasTerrainTarget)
-        {
-            TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
-        }
-
+        ReleaseCurrentTerrainTarget();
         _terrainTarget = terrainOperationPoint;
         _resetRadius = Mathf.Max(0.1f, resetRadius);
         _hasTerrainTarget = true;
@@ -226,6 +206,17 @@ public class TerrainMistileBehaviour : MonoBehaviour
             _nview.GetZDO().Set(TerrainSourceSetZdoKey, true);
             _nview.GetZDO().Set(ResetRadiusZdoKey, _resetRadius);
         }
+    }
+
+    private void ReleaseCurrentTerrainTarget()
+    {
+        if (!_hasTerrainTarget)
+        {
+            return;
+        }
+
+        TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
+        _hasTerrainTarget = false;
     }
 
     private bool TryLoadTerrainTarget()
@@ -330,8 +321,11 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        MarkSelfDestruct("terrain impact");
-        TryResetTerrain("terrain impact");
+        MarkSelfDestruct();
+        if (!TryResetTerrain())
+        {
+            return;
+        }
 
         HitData hitData = new();
         hitData.m_point = transform.position;
@@ -358,7 +352,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return false;
         }
 
-        TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
+        ReleaseCurrentTerrainTarget();
         if (TerrainMistileSystem.TryFindReplacementTerrainTarget(transform.position, out Vector3 replacementTarget))
         {
             SetTerrainTarget(replacementTarget, TerrainMistileSystem.GetResetRadiusForPoint(replacementTarget));
@@ -372,10 +366,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
     private void DestroyWithoutTerrainReset()
     {
         _terrainResetDone = true;
-        if (_hasTerrainTarget)
-        {
-            TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
-        }
+        ReleaseCurrentTerrainTarget();
 
         if (_nview && _nview.IsValid() && _nview.IsOwner() && ZNetScene.instance)
         {
@@ -388,16 +379,16 @@ public class TerrainMistileBehaviour : MonoBehaviour
 
     private void OnDeath()
     {
-        TryResetTerrain("death");
+        TryResetTerrain();
     }
 
-    internal void TryResetTerrain(string reason)
+    internal bool TryResetTerrain()
     {
         if (_nview && _nview.IsValid())
         {
             if (!_nview.IsOwner())
             {
-                return;
+                return false;
             }
 
             _selfDestructTriggered |= _nview.GetZDO().GetBool(SelfDestructZdoKey);
@@ -405,23 +396,36 @@ public class TerrainMistileBehaviour : MonoBehaviour
 
         if (_terrainResetDone)
         {
-            return;
+            return true;
         }
 
-        if (!_selfDestructTriggered)
+        if (_terrainResetInProgress || !_selfDestructTriggered)
         {
-            return;
+            return false;
         }
 
-        _terrainResetDone = true;
-        TryLoadTerrainTarget();
-        Vector3 resetCenter = _hasTerrainTarget ? _terrainTarget : transform.position;
-        if (_hasTerrainTarget)
+        _terrainResetInProgress = true;
+        try
         {
-            TerrainMistileSystem.ReleaseTerrainTarget(_terrainTarget);
-        }
+            TryLoadTerrainTarget();
+            Vector3 resetCenter = _hasTerrainTarget ? _terrainTarget : transform.position;
+            if (!TerrainMistileSystem.ResetTerrainAround(resetCenter, _resetRadius, resetPaint: true))
+            {
+                return false;
+            }
 
-        TerrainMistilePlugin.TerrainMistileLogger.LogInfo($"TerrainMistile terrain reset triggered by {reason} at {resetCenter}.");
-        TerrainMistileSystem.ResetTerrainAround(resetCenter, _resetRadius, resetPaint: true);
+            _terrainResetDone = true;
+            ReleaseCurrentTerrainTarget();
+            return true;
+        }
+        catch (System.Exception ex)
+        {
+            TerrainMistilePlugin.TerrainMistileLogger.LogError($"TerrainMistile terrain reset failed: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            _terrainResetInProgress = false;
+        }
     }
 }

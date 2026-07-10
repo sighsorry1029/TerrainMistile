@@ -1,7 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
-using BepInEx.Bootstrap;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -17,23 +17,39 @@ internal static class TerrainMistileExternalTerrainCompat
     private const string ExpandWorldDataNoBuildManagerTypeName = "ExpandWorldData.NoBuildManager";
     private const string BlueprintProtectedSourcePrefix = "Expand World Data blueprint terrain";
     private const float PatchRetryInterval = 2f;
+    private const int MaxPatchAttempts = 15;
 
+    private static readonly Dictionary<string, Type> LoadedTypes = new(StringComparer.Ordinal);
+    private static readonly Dictionary<Type, Dictionary<string, FieldInfo?>> FieldsByType = new();
     private static ManualLogSource? _logger;
     private static Harmony? _harmony;
     private static bool _terrainPatched;
     private static bool _protectionSyncPatched;
+    private static bool _blueprintReflectionResolved;
+    private static int _patchAttempts;
     private static float _nextPatchAttemptTime;
+    private static MethodInfo? _tryGetLocationYamlMethod;
+    private static MethodInfo? _isBlueprintPrefabMethod;
 
     public static void Initialize(ManualLogSource logger, Harmony harmony)
     {
         _logger = logger;
         _harmony = harmony;
+        if (!IsExpandWorldDataLoaded())
+        {
+            _patchAttempts = MaxPatchAttempts;
+            return;
+        }
+
         TryPatch();
+        _nextPatchAttemptTime = Time.time + PatchRetryInterval;
     }
 
     public static void Update()
     {
-        if ((_terrainPatched && _protectionSyncPatched) || Time.time < _nextPatchAttemptTime)
+        if ((_terrainPatched && _protectionSyncPatched) ||
+            _patchAttempts >= MaxPatchAttempts ||
+            Time.time < _nextPatchAttemptTime)
         {
             return;
         }
@@ -44,11 +60,12 @@ internal static class TerrainMistileExternalTerrainCompat
 
     private static void TryPatch()
     {
-        if (_harmony == null)
+        if (_harmony == null || _patchAttempts >= MaxPatchAttempts)
         {
             return;
         }
 
+        _patchAttempts++;
         TryPatchTerrainHandler();
         TryPatchBlueprintProtectionSync();
     }
@@ -109,16 +126,51 @@ internal static class TerrainMistileExternalTerrainCompat
 
     private static Type? FindLoadedType(string fullName)
     {
-        foreach (var pluginInfo in Chainloader.PluginInfos.Values)
+        if (LoadedTypes.TryGetValue(fullName, out Type cachedType))
         {
-            Type? type = pluginInfo.Instance?.GetType().Assembly.GetType(fullName, throwOnError: false);
+            return cachedType;
+        }
+
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type? type;
+            try
+            {
+                type = assembly.GetType(fullName, throwOnError: false);
+            }
+            catch
+            {
+                continue;
+            }
+
             if (type != null)
             {
+                LoadedTypes[fullName] = type;
                 return type;
             }
         }
 
         return null;
+    }
+
+    private static bool IsExpandWorldDataLoaded()
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                if (string.Equals(assembly.GetName().Name, "ExpandWorldData", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore dynamic assemblies that cannot expose their name.
+            }
+        }
+
+        return false;
     }
 
     private static void HandleTerrainPrefix(Vector3 pos, float radius, bool isBlueprint, object data)
@@ -146,81 +198,131 @@ internal static class TerrainMistileExternalTerrainCompat
     private static void SyncBlueprintProtectedAreas()
     {
         ZoneSystem zoneSystem = ZoneSystem.instance;
-        if (!zoneSystem)
+        if (!zoneSystem || !EnsureBlueprintReflectionMethods())
         {
             return;
         }
 
-        TerrainMistileSystem.ClearProtectedTerrainAreas(BlueprintProtectedSourcePrefix);
-        foreach (ZoneSystem.LocationInstance locationInstance in zoneSystem.m_locationInstances.Values)
+        List<TerrainMistileSystem.ProtectedTerrainAreaData> protectedAreas = new();
+        try
         {
-            if (locationInstance.m_location == null)
+            foreach (ZoneSystem.LocationInstance locationInstance in zoneSystem.m_locationInstances.Values)
             {
-                continue;
+                if (locationInstance.m_location == null)
+                {
+                    continue;
+                }
+
+                string prefab = locationInstance.m_location.m_prefabName;
+                if (string.IsNullOrWhiteSpace(prefab))
+                {
+                    continue;
+                }
+
+                if (!TryIsBlueprintPrefab(prefab, out bool isBlueprint))
+                {
+                    return;
+                }
+
+                if (!isBlueprint)
+                {
+                    continue;
+                }
+
+                bool foundData = TryGetLocationYaml(locationInstance.m_location, out object? locationYaml);
+                if (!foundData && _tryGetLocationYamlMethod == null)
+                {
+                    return;
+                }
+
+                object? data = foundData ? locationYaml : null;
+                float terrainRadius = data == null ? 0f : GetTerrainRadius(locationInstance.m_location.m_exteriorRadius, isBlueprint: true, data);
+                float noBuildRadius = data == null ? 0f : GetNoBuildRadius(data, locationInstance.m_location.m_exteriorRadius);
+                float protectedRadius = Mathf.Max(terrainRadius, locationInstance.m_location.m_exteriorRadius, noBuildRadius) + TerrainMistileSystem.LocationTerrainProtectionPadding;
+
+                protectedAreas.Add(new TerrainMistileSystem.ProtectedTerrainAreaData(
+                    locationInstance.m_position,
+                    protectedRadius,
+                    $"{BlueprintProtectedSourcePrefix} {prefab}"));
             }
-
-            string prefab = locationInstance.m_location.m_prefabName;
-            if (string.IsNullOrWhiteSpace(prefab) ||
-                !TryIsBlueprintPrefab(prefab, out bool isBlueprint) ||
-                !isBlueprint)
-            {
-                continue;
-            }
-
-            object? data = TryGetLocationYaml(locationInstance.m_location, out object? locationYaml) ? locationYaml : null;
-            float terrainRadius = data == null ? 0f : GetTerrainRadius(locationInstance.m_location.m_exteriorRadius, isBlueprint: true, data);
-            float noBuildRadius = data == null ? 0f : GetNoBuildRadius(data, locationInstance.m_location.m_exteriorRadius);
-            float protectedRadius = Mathf.Max(terrainRadius, locationInstance.m_location.m_exteriorRadius, noBuildRadius) + TerrainMistileSystem.LocationTerrainProtectionPadding;
-
-            TerrainMistileSystem.RegisterProtectedTerrainArea(
-                locationInstance.m_position,
-                protectedRadius,
-                $"{BlueprintProtectedSourcePrefix} {prefab}");
         }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning($"Expand World Data blueprint terrain protection refresh failed: {ex.Message}");
+            return;
+        }
+
+        TerrainMistileSystem.ReplaceProtectedTerrainAreas(BlueprintProtectedSourcePrefix, protectedAreas);
     }
 
     private static bool TryGetLocationYaml(ZoneSystem.ZoneLocation location, out object? locationYaml)
     {
         locationYaml = null;
-        Type? locationExtraType = FindLoadedType(ExpandWorldDataLocationExtraTypeName);
-        Type? locationYamlType = FindLoadedType(ExpandWorldDataLocationYamlTypeName);
-        if (locationExtraType == null || locationYamlType == null)
-        {
-            return false;
-        }
-
-        MethodInfo? method = AccessTools.Method(
-            locationExtraType,
-            "TryGetData",
-            new[] { typeof(ZoneSystem.ZoneLocation), locationYamlType.MakeByRefType() });
+        MethodInfo? method = _tryGetLocationYamlMethod;
         if (method == null)
         {
             return false;
         }
 
         object?[] args = { location, null };
-        bool found = method.Invoke(null, args) as bool? == true;
-        locationYaml = args[1];
-        return found && locationYaml != null;
+        try
+        {
+            bool found = method.Invoke(null, args) as bool? == true;
+            locationYaml = args[1];
+            return found && locationYaml != null;
+        }
+        catch (Exception ex)
+        {
+            _tryGetLocationYamlMethod = null;
+            _logger?.LogWarning($"Expand World Data location lookup failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool TryIsBlueprintPrefab(string prefab, out bool isBlueprint)
     {
         isBlueprint = false;
-        Type? blueprintManagerType = FindLoadedType(ExpandWorldDataBlueprintManagerTypeName);
-        if (blueprintManagerType == null)
-        {
-            return false;
-        }
-
-        MethodInfo? method = AccessTools.Method(blueprintManagerType, "Has", new[] { typeof(string) });
+        MethodInfo? method = _isBlueprintPrefabMethod;
         if (method == null)
         {
             return false;
         }
 
-        isBlueprint = method.Invoke(null, new object[] { prefab }) as bool? == true;
-        return true;
+        try
+        {
+            isBlueprint = method.Invoke(null, new object[] { prefab }) as bool? == true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _isBlueprintPrefabMethod = null;
+            _logger?.LogWarning($"Expand World Data blueprint lookup failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool EnsureBlueprintReflectionMethods()
+    {
+        if (_blueprintReflectionResolved)
+        {
+            return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null;
+        }
+
+        Type? locationExtraType = FindLoadedType(ExpandWorldDataLocationExtraTypeName);
+        Type? locationYamlType = FindLoadedType(ExpandWorldDataLocationYamlTypeName);
+        Type? blueprintManagerType = FindLoadedType(ExpandWorldDataBlueprintManagerTypeName);
+        if (locationExtraType == null || locationYamlType == null || blueprintManagerType == null)
+        {
+            return false;
+        }
+
+        _tryGetLocationYamlMethod = AccessTools.Method(
+            locationExtraType,
+            "TryGetData",
+            new[] { typeof(ZoneSystem.ZoneLocation), locationYamlType.MakeByRefType() });
+        _isBlueprintPrefabMethod = AccessTools.Method(blueprintManagerType, "Has", new[] { typeof(string) });
+        _blueprintReflectionResolved = true;
+        return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null;
     }
 
     private static float GetTerrainRadius(float exteriorRadius, bool isBlueprint, object data)
@@ -286,6 +388,19 @@ internal static class TerrainMistileExternalTerrainCompat
 
     private static FieldInfo? GetField(object data, string fieldName)
     {
-        return data.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Type type = data.GetType();
+        if (!FieldsByType.TryGetValue(type, out Dictionary<string, FieldInfo?> fields))
+        {
+            fields = new Dictionary<string, FieldInfo?>(StringComparer.Ordinal);
+            FieldsByType[type] = fields;
+        }
+
+        if (!fields.TryGetValue(fieldName, out FieldInfo? field))
+        {
+            field = type.GetField(fieldName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            fields[fieldName] = field;
+        }
+
+        return field;
     }
 }

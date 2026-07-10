@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Jotunn.Managers;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -12,6 +13,7 @@ internal static class TerrainMistilePrefab
     private static bool _hooked;
     private static bool _registered;
     private static GameObject? _registeredPrefab;
+    private static readonly List<Material> RegisteredPrefabVisualMaterials = new();
 
     internal static void RegisterPrefabHook()
     {
@@ -80,7 +82,7 @@ internal static class TerrainMistilePrefab
         }
 
         MakeCollidersNonBlocking(prefab);
-        ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor);
+        ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor, RegisteredPrefabVisualMaterials);
         PrefabManager.Instance.AddPrefab(prefab);
         _registeredPrefab = prefab;
         _registered = true;
@@ -89,29 +91,80 @@ internal static class TerrainMistilePrefab
 
     internal static void RefreshRegisteredPrefabVisuals()
     {
-        if (_registeredPrefab)
-        {
-            ApplyVisuals(_registeredPrefab, TerrainMistileSpawnRules.DefaultVisualColor);
-            return;
-        }
-
-        GameObject? prefab = ZNetScene.instance ? ZNetScene.instance.GetPrefab(PrefabName) : null;
+        GameObject? prefab = _registeredPrefab
+            ? _registeredPrefab
+            : ZNetScene.instance
+                ? ZNetScene.instance.GetPrefab(PrefabName)
+                : null;
         if (prefab)
         {
-            ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor);
+            RefreshRegisteredPrefabVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor);
         }
     }
 
-    internal static void ApplyVisuals(GameObject root, Color color)
+    internal static void ApplyVisuals(GameObject root, Color color, List<Material>? ownedMaterials = null)
     {
         if (!root)
         {
             return;
         }
 
+        Material[] previousMaterials = ownedMaterials is { Count: > 0 }
+            ? ownedMaterials.ToArray()
+            : Array.Empty<Material>();
+        ownedMaterials?.Clear();
+
         ApplyLightColor(root, color);
         ApplyParticleColor(root, color);
-        ApplyMaterialColor(root, color);
+        ApplyMaterialColor(root, color, ownedMaterials);
+        ReleaseVisualMaterials(previousMaterials);
+    }
+
+    internal static void ReleaseVisualMaterials(List<Material> materials)
+    {
+        foreach (Material material in materials)
+        {
+            if (material)
+            {
+                Object.Destroy(material);
+            }
+        }
+
+        materials.Clear();
+    }
+
+    private static void ReleaseVisualMaterials(Material[] materials)
+    {
+        foreach (Material material in materials)
+        {
+            if (material)
+            {
+                Object.Destroy(material);
+            }
+        }
+    }
+
+    private static void RefreshRegisteredPrefabVisuals(GameObject root, Color color)
+    {
+        ApplyLightColor(root, color);
+        ApplyParticleColor(root, color);
+
+        for (int i = RegisteredPrefabVisualMaterials.Count - 1; i >= 0; i--)
+        {
+            Material material = RegisteredPrefabVisualMaterials[i];
+            if (!material)
+            {
+                RegisteredPrefabVisualMaterials.RemoveAt(i);
+                continue;
+            }
+
+            ApplyMaterialProperties(material, color);
+        }
+
+        if (RegisteredPrefabVisualMaterials.Count == 0)
+        {
+            ApplyMaterialColor(root, color, RegisteredPrefabVisualMaterials);
+        }
     }
 
     internal static void MakeCollidersNonBlocking(GameObject root)
@@ -210,7 +263,7 @@ internal static class TerrainMistilePrefab
         return ScaleRgb(color, Mathf.Lerp(1.3f, 0.7f, t));
     }
 
-    private static void ApplyMaterialColor(GameObject root, Color color)
+    private static void ApplyMaterialColor(GameObject root, Color color, List<Material>? ownedMaterials)
     {
         foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>(includeInactive: true))
         {
@@ -227,6 +280,7 @@ internal static class TerrainMistilePrefab
                 Material copy = Object.Instantiate(material);
                 ApplyMaterialProperties(copy, color);
                 materials[i] = copy;
+                ownedMaterials?.Add(copy);
                 changed = true;
             }
 

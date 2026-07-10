@@ -15,16 +15,18 @@ internal static class TerrainMistileSystem
     private const float FallbackEffectDestroyDelay = 20f;
     private const float ActiveTerrainMistileAreaRadius = 32f;
     private const float SpawnUnitSize = 32f;
+    private const float PlayerBasePieceBucketSize = 32f;
     private const float TerrainHeightDeformationCap = 8f;
     private const float SpawnUnitScanInterval = 1f;
     private const float SpawnUnitRollStateRetention = 600f;
-    private const float NoModifiedTerrainCompRetention = 3f;
+    private const float ModifiedTerrainCellCacheRefreshInterval = 3f;
     private const float PlayerBasePieceBucketRefreshInterval = 2f;
     private const float TargetReservationDuration = 60f;
     private const float ExternalTerrainIgnoreMergeDistance = 0.25f;
     private const float ProtectedTerrainAreaBucketSize = 32f;
     private const float ProtectedTerrainAreaSyncDelay = 0.5f;
     private const float ProtectedTerrainAreaRequestRetryInterval = 5f;
+    private const int MaxSyncedProtectedTerrainAreas = 65536;
     internal const float LocationTerrainProtectionPadding = 5f;
     internal const float LocationTerrainIgnoreDuration = 10f;
     private const string ResetVfxPrefabName = "fx_greenroots_projectile_hit";
@@ -32,13 +34,13 @@ internal static class TerrainMistileSystem
 
     // Per-unit state keeps persistent scans cheap while still allowing changed terrain to re-enter after edits or expiry.
     private static readonly Dictionary<SpawnUnitKey, float> LastSpawnRollTimeByUnit = new();
-    private static readonly Dictionary<TerrainComp, NoModifiedTerrainCompCache> NoModifiedTerrainComps = new();
+    private static readonly Dictionary<TerrainComp, ModifiedTerrainCellCache> ModifiedTerrainCellsByComp = new();
     private static readonly Dictionary<SpawnUnitKey, ModifiedTerrainUnitCandidate> ModifiedTerrainUnits = new();
 
     // These scratch collections are reused by the scan/reset hot paths to avoid per-tick allocations.
     private static readonly List<SpawnUnitKey> TempSpawnUnitKeys = new();
     private static readonly HashSet<SpawnUnitKey> TempCooldownSpawnUnitKeys = new();
-    private static readonly List<TerrainComp> TempNoModifiedTerrainComps = new();
+    private static readonly List<TerrainComp> TempTerrainCompCacheKeys = new();
     private static readonly List<TerrainMistileBehaviour> ActiveTerrainMistiles = new();
     private static readonly List<Player> TempPlayers = new();
     private static readonly List<Player> TempNearbyPlayers = new();
@@ -46,10 +48,10 @@ internal static class TerrainMistileSystem
 
     // Reservations and protected areas prevent repeated TerrainMistiles from wasting rolls on the same reset target.
     private static readonly List<TargetReservation> TargetReservations = new();
-    private static readonly List<ExternalTerrainIgnoreArea> ExternalTerrainIgnoreAreas = new();
-    private static readonly List<ExternalTerrainIgnoreArea> ProtectedTerrainAreas = new();
-    private static readonly Dictionary<TerrainAreaBucketKey, List<ExternalTerrainIgnoreArea>> ProtectedTerrainAreasByBucket = new();
-    private static readonly Dictionary<PlayerBasePieceBucketKey, List<PlayerBasePiece>> PlayerBasePiecesByBucket = new();
+    private static readonly List<TerrainArea> ExternalTerrainIgnoreAreas = new();
+    private static readonly List<TerrainArea> ProtectedTerrainAreas = new();
+    private static readonly Dictionary<SpatialBucketKey, List<TerrainArea>> ProtectedTerrainAreasByBucket = new();
+    private static readonly Dictionary<SpatialBucketKey, List<PlayerBasePiece>> PlayerBasePiecesByBucket = new();
     private static readonly HashSet<string> TempPlayerBasePrefabNames = new(StringComparer.OrdinalIgnoreCase);
     private static bool _playerBasePieceBucketsBuilt;
     private static float _nextPlayerBasePieceBucketRefreshTime;
@@ -148,18 +150,17 @@ internal static class TerrainMistileSystem
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.instance.GetServerPeerID(), RequestProtectedTerrainAreasRpcName, new ZPackage());
     }
 
-    internal static void ResetTerrainAround(Vector3 center, float radius, bool resetPaint)
+    internal static bool ResetTerrainAround(Vector3 center, float radius, bool resetPaint)
     {
         if (_resettingTerrain)
         {
-            return;
+            return false;
         }
 
         _resettingTerrain = true;
         try
         {
             int changedCells = 0;
-            int protectedSkippedCells = 0;
             TempHeightmaps.Clear();
             Heightmap.FindHeightmap(center, radius, TempHeightmaps);
 
@@ -186,8 +187,7 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                int changedOnHeightmap = ClearTerrainCompRadius(terrainComp, hmap, center, radius, resetPaint, out int protectedSkippedOnHeightmap);
-                protectedSkippedCells += protectedSkippedOnHeightmap;
+                int changedOnHeightmap = ClearTerrainCompRadius(terrainComp, hmap, center, radius, resetPaint);
                 if (changedOnHeightmap <= 0)
                 {
                     continue;
@@ -212,6 +212,7 @@ internal static class TerrainMistileSystem
             }
 
             TerrainMistilePlugin.TerrainMistileLogger.LogInfo($"TerrainMistile reset {changedCells} terrain cells around {center}.");
+            return true;
         }
         finally
         {
@@ -220,12 +221,11 @@ internal static class TerrainMistileSystem
         }
     }
 
-    private static int ClearTerrainCompRadius(TerrainComp terrainComp, Heightmap hmap, Vector3 center, float radius, bool resetPaint, out int protectedSkipped)
+    private static int ClearTerrainCompRadius(TerrainComp terrainComp, Heightmap hmap, Vector3 center, float radius, bool resetPaint)
     {
         int width = terrainComp.m_width + 1;
         float radiusSqr = radius * radius;
         int changed = 0;
-        protectedSkipped = 0;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
 
         for (int y = 0; y < width; y++)
@@ -242,11 +242,6 @@ internal static class TerrainMistileSystem
                 int index = GetTerrainCellIndex(width, x, y);
                 if (IsProtectedTerrainArea(cellPoint))
                 {
-                    if (IsResettableTerrainCell(terrainComp, index, resetPaint))
-                    {
-                        protectedSkipped++;
-                    }
-
                     continue;
                 }
 
@@ -278,18 +273,10 @@ internal static class TerrainMistileSystem
         return changed;
     }
 
-    private static bool IsResettableTerrainCell(TerrainComp terrainComp, int index, bool resetPaint)
-    {
-        bool heightChanged = index < terrainComp.m_modifiedHeight.Length &&
-                             (terrainComp.m_modifiedHeight[index] || terrainComp.m_levelDelta[index] != 0f || terrainComp.m_smoothDelta[index] != 0f);
-        bool paintChanged = resetPaint && index < terrainComp.m_modifiedPaint.Length && terrainComp.m_modifiedPaint[index];
-        return heightChanged || paintChanged;
-    }
-
     internal static void ClearSpawnUnitRollState()
     {
         LastSpawnRollTimeByUnit.Clear();
-        NoModifiedTerrainComps.Clear();
+        ModifiedTerrainCellsByComp.Clear();
         PlayerBasePiecesByBucket.Clear();
         _playerBasePieceBucketsBuilt = false;
         _nextPlayerBasePieceBucketRefreshTime = 0f;
@@ -328,7 +315,7 @@ internal static class TerrainMistileSystem
         }
 
         int activeCount = CountActiveTerrainMistilesNearTarget(unit.TargetPoint);
-        int remainingActiveSlots = rule.MaxActiveTerrainMistilesPerArea - activeCount;
+        int remainingActiveSlots = rule.MaxSpawn - activeCount;
         if (remainingActiveSlots <= 0)
         {
             return false;
@@ -341,7 +328,7 @@ internal static class TerrainMistileSystem
             return false;
         }
 
-        int desiredSpawnCount = rule.ScaleSpawnsWithNearbyPlayers
+        int desiredSpawnCount = rule.PerPlayerSpawn
             ? TempNearbyPlayers.Count
             : 1;
         int spawnCount = Mathf.Min(desiredSpawnCount, remainingActiveSlots);
@@ -366,7 +353,7 @@ internal static class TerrainMistileSystem
                 break;
             }
 
-            if (CountActiveTerrainMistilesNearTarget(terrainTarget) >= targetRule.MaxActiveTerrainMistilesPerArea)
+            if (CountActiveTerrainMistilesNearTarget(terrainTarget) >= targetRule.MaxSpawn)
             {
                 break;
             }
@@ -424,7 +411,7 @@ internal static class TerrainMistileSystem
     private static void CollectModifiedTerrainUnits()
     {
         CleanupTargetState();
-        CleanupNoModifiedTerrainComps();
+        CleanupModifiedTerrainCellCaches();
         ModifiedTerrainUnits.Clear();
         TempCooldownSpawnUnitKeys.Clear();
         float maxPlayerSearchRadius = TerrainMistileSpawnRules.MaxPlayerSearchRadius;
@@ -445,88 +432,76 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (IsKnownNoModifiedTerrainComp(terrainComp))
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            if (cellCache.ModifiedCellIndices.Count == 0)
             {
                 continue;
             }
 
-            CollectModifiedTerrainUnits(terrainComp);
+            CollectModifiedTerrainUnits(terrainComp, cellCache);
         }
     }
 
-    private static void CollectModifiedTerrainUnits(TerrainComp terrainComp)
+    private static void CollectModifiedTerrainUnits(TerrainComp terrainComp, ModifiedTerrainCellCache cellCache)
     {
-        if (IsKnownNoModifiedTerrainComp(terrainComp))
-        {
-            return;
-        }
-
-        bool foundModifiedHeightCell = false;
         int width = terrainComp.m_width + 1;
         Heightmap hmap = terrainComp.m_hmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
 
-        for (int y = 0; y < width; y++)
+        foreach (int index in cellCache.ModifiedCellIndices)
         {
-            for (int x = 0; x < width; x++)
+            if (!IsModifiedHeightCell(terrainComp, index))
             {
-                int index = GetTerrainCellIndex(width, x, y);
-                if (!IsModifiedHeightCell(terrainComp, index))
-                {
-                    continue;
-                }
-
-                foundModifiedHeightCell = true;
-                GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
-                Vector3 candidate = new(worldX, hmapPosition.y, worldZ);
-
-                int biome = TerrainMistileSpawnRules.GetBiomeKey(candidate);
-                if (!TerrainMistileSpawnRules.TryGetEnabledRule(biome, out TerrainMistileBiomeSpawnRule rule))
-                {
-                    continue;
-                }
-
-                SpawnUnitKey key = GetSpawnUnitKey(candidate, biome);
-                if (TempCooldownSpawnUnitKeys.Contains(key) || IsSpawnUnitWaitingForInterval(key, rule))
-                {
-                    TempCooldownSpawnUnitKeys.Add(key);
-                    continue;
-                }
-
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule))
-                {
-                    continue;
-                }
-
-                float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
-                Vector3 unitCenter = GetSpawnUnitCenter(key);
-                float score = GetTargetSpreadScore(candidate, unitCenter, deformationPressure);
-                if (ModifiedTerrainUnits.TryGetValue(key, out ModifiedTerrainUnitCandidate unit))
-                {
-                    unit.ModifiedCellCount++;
-                    unit.MaxDeformationPressure = Mathf.Max(unit.MaxDeformationPressure, deformationPressure);
-                    if (score > unit.BestScore)
-                    {
-                        unit.TargetPoint = candidate;
-                        unit.BestScore = score;
-                    }
-
-                    continue;
-                }
-
-                ModifiedTerrainUnits[key] = new ModifiedTerrainUnitCandidate
-                {
-                    Key = key,
-                    Biome = biome,
-                    TargetPoint = candidate,
-                    BestScore = score,
-                    MaxDeformationPressure = deformationPressure,
-                    ModifiedCellCount = 1
-                };
+                continue;
             }
-        }
 
-        UpdateNoModifiedTerrainCompCache(terrainComp, foundModifiedHeightCell);
+            int x = index % width;
+            int y = index / width;
+            GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
+            Vector3 candidate = new(worldX, hmapPosition.y, worldZ);
+
+            int biome = TerrainMistileSpawnRules.GetBiomeKey(candidate);
+            if (!TerrainMistileSpawnRules.TryGetEnabledRule(biome, out TerrainMistileBiomeSpawnRule rule))
+            {
+                continue;
+            }
+
+            SpawnUnitKey key = GetSpawnUnitKey(candidate, biome);
+            if (TempCooldownSpawnUnitKeys.Contains(key) || IsSpawnUnitWaitingForInterval(key, rule))
+            {
+                TempCooldownSpawnUnitKeys.Add(key);
+                continue;
+            }
+
+            if (!IsEligibleModifiedTerrainTarget(candidate, rule))
+            {
+                continue;
+            }
+
+            float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
+            Vector3 unitCenter = GetSpawnUnitCenter(key);
+            float score = GetTargetSpreadScore(candidate, unitCenter, deformationPressure);
+            if (ModifiedTerrainUnits.TryGetValue(key, out ModifiedTerrainUnitCandidate unit))
+            {
+                unit.MaxDeformationPressure = Mathf.Max(unit.MaxDeformationPressure, deformationPressure);
+                if (score > unit.BestScore)
+                {
+                    unit.TargetPoint = candidate;
+                    unit.BestScore = score;
+                }
+
+                continue;
+            }
+
+            ModifiedTerrainUnits[key] = new ModifiedTerrainUnitCandidate
+            {
+                Key = key,
+                Biome = biome,
+                TargetPoint = candidate,
+                BestScore = score,
+                MaxDeformationPressure = deformationPressure
+            };
+        }
     }
 
     private static bool TryFindModifiedTerrainNear(Vector3 center, float range, out Vector3 modifiedPoint)
@@ -545,11 +520,6 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (IsKnownNoModifiedTerrainComp(terrainComp))
-            {
-                continue;
-            }
-
             float halfSizeWithRange = terrainComp.m_size / 2f + range;
             Vector3 terrainCompPosition = ((Component)terrainComp).transform.position;
             if (center.x < terrainCompPosition.x - halfSizeWithRange ||
@@ -560,16 +530,22 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            bool foundModifiedHeightCell = TryFindBestModifiedCellNear(terrainComp, center, rangeSqr, ref found, ref bestScore, ref bestPoint);
-            UpdateNoModifiedTerrainCompCache(terrainComp, foundModifiedHeightCell);
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            if (cellCache.ModifiedCellIndices.Count == 0)
+            {
+                continue;
+            }
+
+            TryFindBestModifiedCellNear(terrainComp, cellCache, center, rangeSqr, ref found, ref bestScore, ref bestPoint);
         }
 
         modifiedPoint = bestPoint;
         return found;
     }
 
-    private static bool TryFindBestModifiedCellNear(
+    private static void TryFindBestModifiedCellNear(
         TerrainComp terrainComp,
+        ModifiedTerrainCellCache cellCache,
         Vector3 center,
         float rangeSqr,
         ref bool found,
@@ -579,55 +555,51 @@ internal static class TerrainMistileSystem
         int width = terrainComp.m_width + 1;
         Heightmap hmap = terrainComp.m_hmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
-        bool foundModifiedHeightCell = false;
-
-        for (int y = 0; y < width; y++)
+        foreach (int index in cellCache.ModifiedCellIndices)
         {
-            for (int x = 0; x < width; x++)
+            if (!IsModifiedHeightCell(terrainComp, index))
             {
-                int index = GetTerrainCellIndex(width, x, y);
-                if (!IsModifiedHeightCell(terrainComp, index))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                foundModifiedHeightCell = true;
-                GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
-                if (!IsWithinHorizontalRadius(worldX, worldZ, center, rangeSqr))
-                {
-                    continue;
-                }
+            int x = index % width;
+            int y = index / width;
+            GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
+            if (!IsWithinHorizontalRadius(worldX, worldZ, center, rangeSqr))
+            {
+                continue;
+            }
 
-                Vector3 candidate = new(worldX, center.y, worldZ);
-                int biome = TerrainMistileSpawnRules.GetBiomeKey(candidate);
-                if (!TerrainMistileSpawnRules.TryGetEnabledRule(biome, out TerrainMistileBiomeSpawnRule rule))
-                {
-                    continue;
-                }
+            Vector3 candidate = new(worldX, center.y, worldZ);
+            int biome = TerrainMistileSpawnRules.GetBiomeKey(candidate);
+            if (!TerrainMistileSpawnRules.TryGetEnabledRule(biome, out TerrainMistileBiomeSpawnRule rule))
+            {
+                continue;
+            }
 
-                if (!IsEligibleModifiedTerrainTarget(candidate, rule))
-                {
-                    continue;
-                }
+            if (!IsEligibleModifiedTerrainTarget(candidate, rule))
+            {
+                continue;
+            }
 
-                float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
-                float score = GetTargetSpreadScore(candidate, center, deformationPressure);
-                if (!found || score > bestScore)
-                {
-                    found = true;
-                    bestScore = score;
-                    bestPoint = candidate;
-                }
+            float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
+            float score = GetTargetSpreadScore(candidate, center, deformationPressure);
+            if (!found || score > bestScore)
+            {
+                found = true;
+                bestScore = score;
+                bestPoint = candidate;
             }
         }
 
-        return foundModifiedHeightCell;
     }
 
     private static bool IsModifiedHeightCell(TerrainComp terrainComp, int index)
     {
-        return index < terrainComp.m_modifiedHeight.Length &&
-               (terrainComp.m_modifiedHeight[index] || terrainComp.m_levelDelta[index] != 0f || terrainComp.m_smoothDelta[index] != 0f);
+        return index >= 0 &&
+               ((index < terrainComp.m_modifiedHeight.Length && terrainComp.m_modifiedHeight[index]) ||
+                (index < terrainComp.m_levelDelta.Length && terrainComp.m_levelDelta[index] != 0f) ||
+                (index < terrainComp.m_smoothDelta.Length && terrainComp.m_smoothDelta[index] != 0f));
     }
 
     private static float GetHeightDeformationPressure(TerrainComp terrainComp, int index)
@@ -678,7 +650,7 @@ internal static class TerrainMistileSystem
 
     private static bool IsIgnoredByPlayerBase(Vector3 point, TerrainMistileBiomeSpawnRule rule)
     {
-        int threshold = rule.IgnorePlayerBaseBaseValue;
+        int threshold = rule.PlayerBaseValue;
         if (threshold <= 0 || rule.BaseCheckRadius <= 0f)
         {
             return false;
@@ -698,14 +670,14 @@ internal static class TerrainMistileSystem
         EnsurePlayerBasePieceBuckets();
         TempPlayerBasePrefabNames.Clear();
         float radiusSqr = radius * radius;
-        PlayerBasePieceBucketKey centerKey = GetPlayerBasePieceBucketKey(point);
-        int bucketRange = Mathf.CeilToInt(radius / SpawnUnitSize);
+        SpatialBucketKey centerKey = GetPlayerBasePieceBucketKey(point);
+        int bucketRange = Mathf.CeilToInt(radius / PlayerBasePieceBucketSize);
 
         for (int z = centerKey.Z - bucketRange; z <= centerKey.Z + bucketRange; z++)
         {
             for (int x = centerKey.X - bucketRange; x <= centerKey.X + bucketRange; x++)
             {
-                PlayerBasePieceBucketKey key = new(x, z);
+                SpatialBucketKey key = new(x, z);
                 if (!PlayerBasePiecesByBucket.TryGetValue(key, out List<PlayerBasePiece> pieces))
                 {
                     continue;
@@ -758,7 +730,7 @@ internal static class TerrainMistileSystem
             }
 
             Vector3 position = ((Component)piece).transform.position;
-            PlayerBasePieceBucketKey key = GetPlayerBasePieceBucketKey(position);
+            SpatialBucketKey key = GetPlayerBasePieceBucketKey(position);
             if (!PlayerBasePiecesByBucket.TryGetValue(key, out List<PlayerBasePiece> pieces))
             {
                 pieces = new List<PlayerBasePiece>();
@@ -779,58 +751,58 @@ internal static class TerrainMistileSystem
         return zdo != null && zdo.GetLong(ZDOVars.s_creator, 0L) != 0L;
     }
 
-    private static PlayerBasePieceBucketKey GetPlayerBasePieceBucketKey(Vector3 point)
+    private static SpatialBucketKey GetPlayerBasePieceBucketKey(Vector3 point)
     {
-        return new PlayerBasePieceBucketKey(
-            Mathf.FloorToInt(point.x / SpawnUnitSize),
-            Mathf.FloorToInt(point.z / SpawnUnitSize));
+        return new SpatialBucketKey(
+            Mathf.FloorToInt(point.x / PlayerBasePieceBucketSize),
+            Mathf.FloorToInt(point.z / PlayerBasePieceBucketSize));
     }
 
-    private static bool IsKnownNoModifiedTerrainComp(TerrainComp terrainComp)
+    private static ModifiedTerrainCellCache GetModifiedTerrainCellCache(TerrainComp terrainComp)
     {
-        if (!NoModifiedTerrainComps.TryGetValue(terrainComp, out NoModifiedTerrainCompCache cache))
+        if (!ModifiedTerrainCellsByComp.TryGetValue(terrainComp, out ModifiedTerrainCellCache cache))
         {
-            return false;
+            cache = new ModifiedTerrainCellCache();
+            ModifiedTerrainCellsByComp[terrainComp] = cache;
         }
 
-        if (Time.time < cache.ExpireTime && terrainComp.m_operations == cache.Operations)
+        int width = terrainComp.m_width + 1;
+        if (cache.Width != width ||
+            cache.Operations != terrainComp.m_operations ||
+            Time.time >= cache.NextRefreshTime)
         {
-            return true;
-        }
-
-        NoModifiedTerrainComps.Remove(terrainComp);
-        return false;
-    }
-
-    private static void UpdateNoModifiedTerrainCompCache(TerrainComp terrainComp, bool foundModifiedHeightCell)
-    {
-        if (foundModifiedHeightCell)
-        {
-            NoModifiedTerrainComps.Remove(terrainComp);
-            return;
-        }
-
-        NoModifiedTerrainComps[terrainComp] = new NoModifiedTerrainCompCache(
-            terrainComp.m_operations,
-            Time.time + NoModifiedTerrainCompRetention);
-    }
-
-    private static void CleanupNoModifiedTerrainComps()
-    {
-        TempNoModifiedTerrainComps.Clear();
-        float now = Time.time;
-        foreach (KeyValuePair<TerrainComp, NoModifiedTerrainCompCache> entry in NoModifiedTerrainComps)
-        {
-            TerrainComp terrainComp = entry.Key;
-            if (!terrainComp || entry.Value.ExpireTime <= now || terrainComp.m_operations != entry.Value.Operations)
+            cache.ModifiedCellIndices.Clear();
+            int cellCount = width * width;
+            for (int index = 0; index < cellCount; index++)
             {
-                TempNoModifiedTerrainComps.Add(terrainComp!);
+                if (IsModifiedHeightCell(terrainComp, index))
+                {
+                    cache.ModifiedCellIndices.Add(index);
+                }
+            }
+
+            cache.Width = width;
+            cache.Operations = terrainComp.m_operations;
+            cache.NextRefreshTime = Time.time + ModifiedTerrainCellCacheRefreshInterval;
+        }
+
+        return cache;
+    }
+
+    private static void CleanupModifiedTerrainCellCaches()
+    {
+        TempTerrainCompCacheKeys.Clear();
+        foreach (TerrainComp terrainComp in ModifiedTerrainCellsByComp.Keys)
+        {
+            if (!terrainComp)
+            {
+                TempTerrainCompCacheKeys.Add(terrainComp!);
             }
         }
 
-        foreach (TerrainComp terrainComp in TempNoModifiedTerrainComps)
+        foreach (TerrainComp terrainComp in TempTerrainCompCacheKeys)
         {
-            NoModifiedTerrainComps.Remove(terrainComp);
+            ModifiedTerrainCellsByComp.Remove(terrainComp);
         }
     }
 
@@ -883,8 +855,7 @@ internal static class TerrainMistileSystem
             return;
         }
 
-        BroadcastProtectedTerrainAreas();
-        _protectedTerrainAreasDirty = false;
+        SendProtectedTerrainAreas(sender);
     }
 
     private static void RPC_ProtectedTerrainAreas(long sender, ZPackage package)
@@ -894,10 +865,20 @@ internal static class TerrainMistileSystem
             return;
         }
 
+        if (ZRoutedRpc.instance == null || sender != ZRoutedRpc.instance.GetServerPeerID())
+        {
+            return;
+        }
+
         try
         {
-            int count = Mathf.Max(0, package.ReadInt());
-            ProtectedTerrainAreas.Clear();
+            int count = package.ReadInt();
+            if (count < 0 || count > MaxSyncedProtectedTerrainAreas)
+            {
+                throw new InvalidOperationException($"Protected terrain area count {count} is outside the supported range.");
+            }
+
+            List<TerrainArea> syncedAreas = new(count);
             for (int i = 0; i < count; i++)
             {
                 string source = package.ReadString();
@@ -908,7 +889,7 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                ProtectedTerrainAreas.Add(new ExternalTerrainIgnoreArea
+                syncedAreas.Add(new TerrainArea
                 {
                     Center = center,
                     Radius = radius,
@@ -916,6 +897,8 @@ internal static class TerrainMistileSystem
                 });
             }
 
+            ProtectedTerrainAreas.Clear();
+            ProtectedTerrainAreas.AddRange(syncedAreas);
             MarkProtectedTerrainAreaBucketsDirty();
             _protectedTerrainAreasClientSynced = true;
         }
@@ -927,6 +910,11 @@ internal static class TerrainMistileSystem
 
     private static void BroadcastProtectedTerrainAreas()
     {
+        SendProtectedTerrainAreas(ZRoutedRpc.Everybody);
+    }
+
+    private static void SendProtectedTerrainAreas(long target)
+    {
         if (ZRoutedRpc.instance == null || !_protectedTerrainAreasRpcRegistered)
         {
             return;
@@ -934,14 +922,14 @@ internal static class TerrainMistileSystem
 
         ZPackage package = new();
         package.Write(ProtectedTerrainAreas.Count);
-        foreach (ExternalTerrainIgnoreArea area in ProtectedTerrainAreas)
+        foreach (TerrainArea area in ProtectedTerrainAreas)
         {
             package.Write(area.Source);
             package.Write(area.Center);
             package.Write(area.Radius);
         }
 
-        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, ProtectedTerrainAreasRpcName, package);
+        ZRoutedRpc.instance.InvokeRoutedRPC(target, ProtectedTerrainAreasRpcName, package);
     }
 
     private static void CreateResetEffectsLocal(Vector3 center, string vfxPrefab, string sfxPrefab)
@@ -992,7 +980,7 @@ internal static class TerrainMistileSystem
         TerrainMistileBehaviour behaviour = instance.GetComponent<TerrainMistileBehaviour>();
         if (behaviour)
         {
-            behaviour.Initialize(target, terrainOperationPoint, resetRadius, health);
+            behaviour.Initialize(terrainOperationPoint, resetRadius, health);
         }
 
         return true;
@@ -1125,19 +1113,18 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (IsKnownNoModifiedTerrainComp(terrainComp))
-            {
-                continue;
-            }
-
             if (!IsTerrainCompNearPoint(terrainComp, center, radius))
             {
                 continue;
             }
 
-            bool hasModifiedCellInRadius = HasModifiedCellInRadius(terrainComp, center, radiusSqr, out bool foundModifiedHeightCell);
-            UpdateNoModifiedTerrainCompCache(terrainComp, foundModifiedHeightCell);
-            if (hasModifiedCellInRadius)
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            if (cellCache.ModifiedCellIndices.Count == 0)
+            {
+                continue;
+            }
+
+            if (HasModifiedCellInRadius(terrainComp, cellCache, center, radiusSqr))
             {
                 return true;
             }
@@ -1157,7 +1144,7 @@ internal static class TerrainMistileSystem
         source = string.IsNullOrWhiteSpace(source) ? "external terrain" : source.Trim();
         float expireTime = durationSeconds > 0f ? Time.time + durationSeconds : 0f;
         float mergeDistanceSqr = ExternalTerrainIgnoreMergeDistance * ExternalTerrainIgnoreMergeDistance;
-        foreach (ExternalTerrainIgnoreArea area in ExternalTerrainIgnoreAreas)
+        foreach (TerrainArea area in ExternalTerrainIgnoreAreas)
         {
             if (!string.Equals(area.Source, source, StringComparison.OrdinalIgnoreCase) ||
                 HorizontalDistanceSqr(area.Center, center) > mergeDistanceSqr)
@@ -1171,7 +1158,7 @@ internal static class TerrainMistileSystem
             return;
         }
 
-        ExternalTerrainIgnoreAreas.Add(new ExternalTerrainIgnoreArea
+        ExternalTerrainIgnoreAreas.Add(new TerrainArea
         {
             Center = center,
             Radius = radius,
@@ -1180,27 +1167,88 @@ internal static class TerrainMistileSystem
         });
     }
 
-    internal static void ClearProtectedTerrainAreas(string sourcePrefix)
+    internal static void ReplaceProtectedTerrainAreas(string sourcePrefix, IReadOnlyList<ProtectedTerrainAreaData> replacements)
     {
         if (string.IsNullOrWhiteSpace(sourcePrefix))
         {
             return;
         }
 
-        int removed = 0;
+        if (ProtectedTerrainAreasMatch(sourcePrefix, replacements))
+        {
+            return;
+        }
+
         for (int i = ProtectedTerrainAreas.Count - 1; i >= 0; i--)
         {
             if (ProtectedTerrainAreas[i].Source.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 ProtectedTerrainAreas.RemoveAt(i);
-                removed++;
             }
         }
 
-        if (removed > 0)
+        for (int i = 0; i < replacements.Count; i++)
         {
-            MarkProtectedTerrainAreasDirty();
+            ProtectedTerrainAreaData replacement = replacements[i];
+            if (replacement.Radius <= 0f)
+            {
+                continue;
+            }
+
+            ProtectedTerrainAreas.Add(new TerrainArea
+            {
+                Center = replacement.Center,
+                Radius = replacement.Radius,
+                Source = replacement.Source
+            });
         }
+
+        MarkProtectedTerrainAreasDirty();
+    }
+
+    private static bool ProtectedTerrainAreasMatch(string sourcePrefix, IReadOnlyList<ProtectedTerrainAreaData> replacements)
+    {
+        Dictionary<ProtectedTerrainAreaData, int> existingCounts = new();
+        int existingCount = 0;
+        foreach (TerrainArea area in ProtectedTerrainAreas)
+        {
+            if (!area.Source.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ProtectedTerrainAreaData data = new(area.Center, area.Radius, area.Source);
+            existingCounts.TryGetValue(data, out int count);
+            existingCounts[data] = count + 1;
+            existingCount++;
+        }
+
+        int replacementCount = 0;
+        for (int i = 0; i < replacements.Count; i++)
+        {
+            ProtectedTerrainAreaData replacement = replacements[i];
+            if (replacement.Radius <= 0f)
+            {
+                continue;
+            }
+
+            replacementCount++;
+            if (!existingCounts.TryGetValue(replacement, out int count))
+            {
+                return false;
+            }
+
+            if (count <= 1)
+            {
+                existingCounts.Remove(replacement);
+            }
+            else
+            {
+                existingCounts[replacement] = count - 1;
+            }
+        }
+
+        return existingCount == replacementCount && existingCounts.Count == 0;
     }
 
     internal static void RegisterProtectedTerrainArea(Vector3 center, float radius, string source)
@@ -1212,7 +1260,7 @@ internal static class TerrainMistileSystem
 
         source = string.IsNullOrWhiteSpace(source) ? "protected terrain" : source.Trim();
         float mergeDistanceSqr = ExternalTerrainIgnoreMergeDistance * ExternalTerrainIgnoreMergeDistance;
-        foreach (ExternalTerrainIgnoreArea area in ProtectedTerrainAreas)
+        foreach (TerrainArea area in ProtectedTerrainAreas)
         {
             if (!string.Equals(area.Source, source, StringComparison.OrdinalIgnoreCase) ||
                 HorizontalDistanceSqr(area.Center, center) > mergeDistanceSqr)
@@ -1220,14 +1268,21 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            float previousRadius = area.Radius;
+            float mergedRadius = Mathf.Max(area.Radius, radius);
+            bool centerChanged = HorizontalDistanceSqr(area.Center, center) > 0.0001f;
+            bool radiusChanged = !Mathf.Approximately(area.Radius, mergedRadius);
+            if (!centerChanged && !radiusChanged)
+            {
+                return;
+            }
+
             area.Center = center;
-            area.Radius = Mathf.Max(area.Radius, radius);
+            area.Radius = mergedRadius;
             MarkProtectedTerrainAreasDirty();
             return;
         }
 
-        ProtectedTerrainAreas.Add(new ExternalTerrainIgnoreArea
+        ProtectedTerrainAreas.Add(new TerrainArea
         {
             Center = center,
             Radius = radius,
@@ -1272,13 +1327,13 @@ internal static class TerrainMistileSystem
         }
 
         RebuildProtectedTerrainAreaBucketsIfNeeded();
-        TerrainAreaBucketKey bucketKey = GetTerrainAreaBucketKey(point);
-        if (!ProtectedTerrainAreasByBucket.TryGetValue(bucketKey, out List<ExternalTerrainIgnoreArea> areas))
+        SpatialBucketKey bucketKey = GetTerrainAreaBucketKey(point);
+        if (!ProtectedTerrainAreasByBucket.TryGetValue(bucketKey, out List<TerrainArea> areas))
         {
             return false;
         }
 
-        foreach (ExternalTerrainIgnoreArea area in areas)
+        foreach (TerrainArea area in areas)
         {
             if (HorizontalDistanceSqr(point, area.Center) > area.Radius * area.Radius)
             {
@@ -1316,7 +1371,7 @@ internal static class TerrainMistileSystem
         }
 
         ProtectedTerrainAreasByBucket.Clear();
-        foreach (ExternalTerrainIgnoreArea area in ProtectedTerrainAreas)
+        foreach (TerrainArea area in ProtectedTerrainAreas)
         {
             if (area.Radius <= 0f)
             {
@@ -1331,10 +1386,10 @@ internal static class TerrainMistileSystem
             {
                 for (int x = minX; x <= maxX; x++)
                 {
-                    TerrainAreaBucketKey key = new(x, z);
-                    if (!ProtectedTerrainAreasByBucket.TryGetValue(key, out List<ExternalTerrainIgnoreArea> bucketAreas))
+                    SpatialBucketKey key = new(x, z);
+                    if (!ProtectedTerrainAreasByBucket.TryGetValue(key, out List<TerrainArea> bucketAreas))
                     {
-                        bucketAreas = new List<ExternalTerrainIgnoreArea>();
+                        bucketAreas = new List<TerrainArea>();
                         ProtectedTerrainAreasByBucket[key] = bucketAreas;
                     }
 
@@ -1346,9 +1401,9 @@ internal static class TerrainMistileSystem
         _protectedTerrainAreaBucketsDirty = false;
     }
 
-    private static TerrainAreaBucketKey GetTerrainAreaBucketKey(Vector3 point)
+    private static SpatialBucketKey GetTerrainAreaBucketKey(Vector3 point)
     {
-        return new TerrainAreaBucketKey(GetTerrainAreaBucketCoord(point.x), GetTerrainAreaBucketCoord(point.z));
+        return new SpatialBucketKey(GetTerrainAreaBucketCoord(point.x), GetTerrainAreaBucketCoord(point.z));
     }
 
     private static int GetTerrainAreaBucketCoord(float value)
@@ -1366,9 +1421,9 @@ internal static class TerrainMistileSystem
         return Mathf.Max(currentExpireTime, newExpireTime);
     }
 
-    private static bool IsIgnoredByTerrainAreas(Vector3 point, List<ExternalTerrainIgnoreArea> areas)
+    private static bool IsIgnoredByTerrainAreas(Vector3 point, List<TerrainArea> areas)
     {
-        foreach (ExternalTerrainIgnoreArea area in areas)
+        foreach (TerrainArea area in areas)
         {
             if (HorizontalDistanceSqr(point, area.Center) > area.Radius * area.Radius)
             {
@@ -1446,37 +1501,33 @@ internal static class TerrainMistileSystem
 
     private static bool HasModifiedCellInRadius(
         TerrainComp terrainComp,
+        ModifiedTerrainCellCache cellCache,
         Vector3 center,
-        float radiusSqr,
-        out bool foundModifiedHeightCell)
+        float radiusSqr)
     {
         int width = terrainComp.m_width + 1;
         Heightmap hmap = terrainComp.m_hmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
-        foundModifiedHeightCell = false;
 
-        for (int y = 0; y < width; y++)
+        foreach (int index in cellCache.ModifiedCellIndices)
         {
-            for (int x = 0; x < width; x++)
+            if (!IsModifiedHeightCell(terrainComp, index))
             {
-                int index = GetTerrainCellIndex(width, x, y);
-                if (!IsModifiedHeightCell(terrainComp, index))
+                continue;
+            }
+
+            int x = index % width;
+            int y = index / width;
+            GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
+            if (IsWithinHorizontalRadius(worldX, worldZ, center, radiusSqr))
+            {
+                Vector3 cellPoint = new(worldX, center.y, worldZ);
+                if (IsProtectedTerrainArea(cellPoint))
                 {
                     continue;
                 }
 
-                foundModifiedHeightCell = true;
-                GetTerrainCellWorldXZ(hmap, hmapPosition, x, y, out float worldX, out float worldZ);
-                if (IsWithinHorizontalRadius(worldX, worldZ, center, radiusSqr))
-                {
-                    Vector3 cellPoint = new(worldX, center.y, worldZ);
-                    if (IsProtectedTerrainArea(cellPoint))
-                    {
-                        continue;
-                    }
-
-                    return true;
-                }
+                return true;
             }
         }
 
@@ -1504,8 +1555,23 @@ internal static class TerrainMistileSystem
         float score = nearestSuppressionGap == float.MaxValue ? 0f : nearestSuppressionGap;
         score += Mathf.Min(HorizontalDistanceSqr(point, center), 4096f) * 0.001f;
         score += Mathf.Clamp01(deformationPressure);
-        score += Random.Range(0f, 0.25f);
+        score += GetTargetTieBreaker(point);
         return score;
+    }
+
+    private static float GetTargetTieBreaker(Vector3 point)
+    {
+        int x = Mathf.RoundToInt(point.x * 10f);
+        int z = Mathf.RoundToInt(point.z * 10f);
+        uint hash;
+        unchecked
+        {
+            hash = (uint)(x * 73856093) ^ (uint)(z * 19349663);
+            hash ^= hash >> 13;
+            hash *= 1274126177u;
+        }
+
+        return (hash & 0x00FFFFFFu) / 16777215f * 0.25f;
     }
 
     private static float GetNearestSuppressionGap(Vector3 point)
@@ -1609,12 +1675,49 @@ internal static class TerrainMistileSystem
         public float ExpireTime;
     }
 
-    private sealed class ExternalTerrainIgnoreArea
+    private sealed class TerrainArea
     {
         public Vector3 Center;
         public float Radius;
         public string Source = "";
         public float ExpireTime;
+    }
+
+    internal readonly struct ProtectedTerrainAreaData : IEquatable<ProtectedTerrainAreaData>
+    {
+        public ProtectedTerrainAreaData(Vector3 center, float radius, string source)
+        {
+            Center = center;
+            Radius = radius;
+            Source = string.IsNullOrWhiteSpace(source) ? "protected terrain" : source.Trim();
+        }
+
+        public Vector3 Center { get; }
+        public float Radius { get; }
+        public string Source { get; }
+
+        public bool Equals(ProtectedTerrainAreaData other)
+        {
+            return Center.Equals(other.Center) &&
+                   Radius.Equals(other.Radius) &&
+                   string.Equals(Source, other.Source, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is ProtectedTerrainAreaData other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = Center.GetHashCode();
+                hash = (hash * 397) ^ Radius.GetHashCode();
+                hash = (hash * 397) ^ StringComparer.OrdinalIgnoreCase.GetHashCode(Source);
+                return hash;
+            }
+        }
     }
 
     private readonly struct PlayerBasePiece
@@ -1629,9 +1732,9 @@ internal static class TerrainMistileSystem
         public Vector3 Position { get; }
     }
 
-    private readonly struct TerrainAreaBucketKey : IEquatable<TerrainAreaBucketKey>
+    private readonly struct SpatialBucketKey : IEquatable<SpatialBucketKey>
     {
-        public TerrainAreaBucketKey(int x, int z)
+        public SpatialBucketKey(int x, int z)
         {
             X = x;
             Z = z;
@@ -1640,14 +1743,14 @@ internal static class TerrainMistileSystem
         public int X { get; }
         public int Z { get; }
 
-        public bool Equals(TerrainAreaBucketKey other)
+        public bool Equals(SpatialBucketKey other)
         {
             return X == other.X && Z == other.Z;
         }
 
         public override bool Equals(object? obj)
         {
-            return obj is TerrainAreaBucketKey other && Equals(other);
+            return obj is SpatialBucketKey other && Equals(other);
         }
 
         public override int GetHashCode()
@@ -1659,46 +1762,12 @@ internal static class TerrainMistileSystem
         }
     }
 
-    private readonly struct PlayerBasePieceBucketKey : IEquatable<PlayerBasePieceBucketKey>
+    private sealed class ModifiedTerrainCellCache
     {
-        public PlayerBasePieceBucketKey(int x, int z)
-        {
-            X = x;
-            Z = z;
-        }
-
-        public int X { get; }
-        public int Z { get; }
-
-        public bool Equals(PlayerBasePieceBucketKey other)
-        {
-            return X == other.X && Z == other.Z;
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is PlayerBasePieceBucketKey other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                return (X * 397) ^ Z;
-            }
-        }
-    }
-
-    private readonly struct NoModifiedTerrainCompCache
-    {
-        public NoModifiedTerrainCompCache(int operations, float expireTime)
-        {
-            Operations = operations;
-            ExpireTime = expireTime;
-        }
-
-        public int Operations { get; }
-        public float ExpireTime { get; }
+        public int Width = -1;
+        public int Operations;
+        public float NextRefreshTime;
+        public readonly List<int> ModifiedCellIndices = new();
     }
 
     private readonly struct SpawnUnitKey : IEquatable<SpawnUnitKey>
@@ -1748,6 +1817,5 @@ internal static class TerrainMistileSystem
         public Vector3 TargetPoint;
         public float BestScore;
         public float MaxDeformationPressure;
-        public int ModifiedCellCount;
     }
 }
