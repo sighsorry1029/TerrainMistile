@@ -1,6 +1,6 @@
 {
   "name": "TerrainMistile",
-  "version_number": "1.0.3",
+  "version_number": "1.0.4",
   "website_url": "https://discord.gg/jkcJCq2sK5",
   "description": "Spawns configurable TerrainMistiles from changed terrain. They seek the edit, detonate, and reset player-made height/paint changes while preserving world/location terrain. Tune biome chance, interval, radius, health, color, and base protection.",
   "dependencies": [

@@ -91,6 +91,17 @@ internal static class TerrainMistileSpawnRules
     internal static bool HasEnabledRules => _hasEnabledRules;
     internal static Color DefaultVisualColor => _defaultRule.VisualColor;
     internal static bool IsPlayerBasePrefabName(string prefabName) => _playerBasePrefabNames.Contains(prefabName);
+    internal static TerrainMistileBiomeSpawnRule DefaultRule => _defaultRule;
+
+    internal static List<string> GetPlayerBasePrefabNamesSnapshot()
+    {
+        return new List<string>(_playerBasePrefabNames);
+    }
+
+    internal static List<int> GetConfiguredBiomeKeysSnapshot()
+    {
+        return new List<int>(BiomeRules.Keys);
+    }
 
     internal static void Initialize(ManualLogSource logger)
     {

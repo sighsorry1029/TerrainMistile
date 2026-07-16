@@ -52,9 +52,11 @@ internal static class TerrainMistileSystem
     private static readonly List<TerrainArea> ProtectedTerrainAreas = new();
     private static readonly Dictionary<SpatialBucketKey, List<TerrainArea>> ProtectedTerrainAreasByBucket = new();
     private static readonly Dictionary<SpatialBucketKey, List<PlayerBasePiece>> PlayerBasePiecesByBucket = new();
+    private static readonly Dictionary<SpatialBucketKey, bool> PlayerBaseZoneReadinessByKey = new();
     private static readonly HashSet<string> TempPlayerBasePrefabNames = new(StringComparer.OrdinalIgnoreCase);
     private static bool _playerBasePieceBucketsBuilt;
     private static float _nextPlayerBasePieceBucketRefreshTime;
+    private static int _playerBaseZoneReadinessFrame = -1;
     private static bool _resettingTerrain;
     private static float _nextSpawnUnitScanTime;
     private static bool _resetEffectsRpcRegistered;
@@ -278,8 +280,10 @@ internal static class TerrainMistileSystem
         LastSpawnRollTimeByUnit.Clear();
         ModifiedTerrainCellsByComp.Clear();
         PlayerBasePiecesByBucket.Clear();
+        PlayerBaseZoneReadinessByKey.Clear();
         _playerBasePieceBucketsBuilt = false;
         _nextPlayerBasePieceBucketRefreshTime = 0f;
+        _playerBaseZoneReadinessFrame = -1;
     }
 
     private static void CollectEligiblePlayers()
@@ -635,7 +639,7 @@ internal static class TerrainMistileSystem
             return false;
         }
 
-        if (IsIgnoredByPlayerBase(point, rule))
+        if (!IsPlayerBaseAreaReady(point, rule) || IsIgnoredByPlayerBase(point, rule))
         {
             return false;
         }
@@ -646,6 +650,65 @@ internal static class TerrainMistileSystem
         }
 
         return true;
+    }
+
+    private static bool IsPlayerBaseAreaReady(Vector3 point, TerrainMistileBiomeSpawnRule rule)
+    {
+        if (rule.PlayerBaseValue <= 0 || rule.BaseCheckRadius <= 0f)
+        {
+            return true;
+        }
+
+        if (!ZNetScene.instance || !ZoneSystem.instance || ZDOMan.instance == null)
+        {
+            return false;
+        }
+
+        float radius = rule.BaseCheckRadius;
+        float radiusSqr = radius * radius;
+        Vector2i minZone = ZoneSystem.GetZone(new Vector3(point.x - radius, point.y, point.z - radius));
+        Vector2i maxZone = ZoneSystem.GetZone(new Vector3(point.x + radius, point.y, point.z + radius));
+
+        for (int z = minZone.y; z <= maxZone.y; z++)
+        {
+            for (int x = minZone.x; x <= maxZone.x; x++)
+            {
+                Vector2i zone = new(x, z);
+                Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+                float dx = Mathf.Max(Mathf.Abs(point.x - zoneCenter.x) - ZoneSystem.c_ZoneHalfSize, 0f);
+                float dz = Mathf.Max(Mathf.Abs(point.z - zoneCenter.z) - ZoneSystem.c_ZoneHalfSize, 0f);
+                if (dx * dx + dz * dz > radiusSqr)
+                {
+                    continue;
+                }
+
+                if (!IsPlayerBaseZoneReady(zone))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsPlayerBaseZoneReady(Vector2i zone)
+    {
+        if (_playerBaseZoneReadinessFrame != Time.frameCount)
+        {
+            PlayerBaseZoneReadinessByKey.Clear();
+            _playerBaseZoneReadinessFrame = Time.frameCount;
+        }
+
+        SpatialBucketKey key = new(zone.x, zone.y);
+        if (PlayerBaseZoneReadinessByKey.TryGetValue(key, out bool ready))
+        {
+            return ready;
+        }
+
+        ready = ZNetScene.instance && ZNetScene.instance.IsAreaReady(ZoneSystem.GetZonePos(zone));
+        PlayerBaseZoneReadinessByKey[key] = ready;
+        return ready;
     }
 
     private static bool IsIgnoredByPlayerBase(Vector3 point, TerrainMistileBiomeSpawnRule rule)

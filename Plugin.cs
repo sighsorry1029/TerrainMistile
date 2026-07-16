@@ -15,7 +15,7 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.3";
+    internal const string ModVersion = "1.0.4";
     internal const string Author = "sighsorry";
     internal const string DefaultDisplayName = "Earth Warden";
     private const string ModGUID = $"{Author}.{ModName}";

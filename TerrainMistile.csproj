@@ -123,6 +123,7 @@
     <ItemGroup>
         <Compile Include="Plugin.cs"/>
         <Compile Include="TerrainMistileBehaviour.cs"/>
+        <Compile Include="TerrainMistileCompendium.cs"/>
         <Compile Include="TerrainMistileCompat.cs"/>
         <Compile Include="TerrainMistileExternalTerrainCompat.cs"/>
         <Compile Include="TerrainMistilePatches.cs"/>
