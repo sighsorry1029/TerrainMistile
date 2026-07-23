@@ -45,6 +45,7 @@ internal static class TerrainMistileSystem
     private static readonly List<Player> TempPlayers = new();
     private static readonly List<Player> TempNearbyPlayers = new();
     private static readonly List<Heightmap> TempHeightmaps = new();
+    private static readonly List<ZDO> TempPlayerBaseZoneObjects = new();
 
     // Reservations and protected areas prevent repeated TerrainMistiles from wasting rolls on the same reset target.
     private static readonly List<TargetReservation> TargetReservations = new();
@@ -706,8 +707,47 @@ internal static class TerrainMistileSystem
             return ready;
         }
 
-        ready = ZNetScene.instance && ZNetScene.instance.IsAreaReady(ZoneSystem.GetZonePos(zone));
+        ready = IsPlayerBaseZoneReadyUncached(zone);
         PlayerBaseZoneReadinessByKey[key] = ready;
+        return ready;
+    }
+
+    private static bool IsPlayerBaseZoneReadyUncached(Vector2i zone)
+    {
+        if (!ZNetScene.instance ||
+            !ZoneSystem.instance ||
+            ZDOMan.instance == null ||
+            !ZoneSystem.instance.IsZoneLoaded(zone))
+        {
+            return false;
+        }
+
+        TempPlayerBaseZoneObjects.Clear();
+        // ZNetScene.IsAreaReady expands to a 3x3 area; only pending configured base pieces matter here.
+        ZDOMan.instance.FindSectorObjects(zone, 0, 0, TempPlayerBaseZoneObjects);
+        bool ready = true;
+        foreach (ZDO zdo in TempPlayerBaseZoneObjects)
+        {
+            if (zdo.GetLong(ZDOVars.s_creator, 0L) == 0L)
+            {
+                continue;
+            }
+
+            GameObject prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+            if (!prefab ||
+                !TerrainMistileSpawnRules.IsPlayerBasePrefabName(GetStablePrefabName(prefab)))
+            {
+                continue;
+            }
+
+            if (!ZNetScene.instance.FindInstance(zdo))
+            {
+                ready = false;
+                break;
+            }
+        }
+
+        TempPlayerBaseZoneObjects.Clear();
         return ready;
     }
 
