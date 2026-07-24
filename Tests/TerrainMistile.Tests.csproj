@@ -1,0 +1,40 @@
+<Project Sdk="MSTest.Sdk/4.3.2">
+  <Import Project="..\environment.props" Condition="Exists('..\environment.props')" />
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <UseVSTest>true</UseVSTest>
+    <DeployToGame>false</DeployToGame>
+    <PackageMod>false</PackageMod>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GamePath Condition="'$(GamePath)' == '' AND Exists('$(ValheimGamePath)')">$(ValheimGamePath)</GamePath>
+    <GamePath Condition="'$(GamePath)' == '' AND '$(OS)' == 'Windows_NT'">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 892970', 'InstallLocation', null, RegistryView.Registry64, RegistryView.Registry32))</GamePath>
+    <_SteamPath Condition="'$(OS)' == 'Windows_NT'">$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', null, RegistryView.Registry32))</_SteamPath>
+    <GamePath Condition="'$(GamePath)' == '' AND '$(_SteamPath)' != '' AND Exists('$(_SteamPath)\steamapps\common\Valheim')">$(_SteamPath)\steamapps\common\Valheim</GamePath>
+    <GamePath Condition="'$(GamePath)' == '' AND Exists('C:\Program Files\Steam\steamapps\common\Valheim')">C:\Program Files\Steam\steamapps\common\Valheim</GamePath>
+    <GamePath Condition="'$(GamePath)' == '' AND Exists('C:\Program Files (x86)\Steam\steamapps\common\Valheim')">C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
+    <GamePath Condition="'$(GamePath)' == '' AND Exists('D:\SteamLibrary\steamapps\common\Valheim')">D:\SteamLibrary\steamapps\common\Valheim</GamePath>
+    <BepInExPath Condition="'$(BepInExPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\BepInEx</BepInExPath>
+    <CorlibPath Condition="'$(CorlibPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\valheim_Data\Managed</CorlibPath>
+    <PublicizedAssembliesPath Condition="'$(PublicizedAssembliesPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TerrainMistile.csproj"
+                      AdditionalProperties="PackageMod=false;DeployToGame=false" />
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(CorlibPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="$(CorlibPath)\netstandard.dll" Link="netstandard.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateValheimTestReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(CorlibPath)\UnityEngine.CoreModule.dll')" Text="UnityEngine.CoreModule.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
+    <Error Condition="!Exists('$(CorlibPath)\netstandard.dll')" Text="Valheim's netstandard.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
+  </Target>
+</Project>

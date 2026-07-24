@@ -195,7 +195,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
     {
         ReleaseCurrentTerrainTarget();
         _terrainTarget = terrainOperationPoint;
-        _resetRadius = Mathf.Max(0.1f, resetRadius);
+        _resetRadius = NormalizeResetRadius(resetRadius);
         _hasTerrainTarget = true;
         TerrainMistileSystem.ReserveTerrainTarget(_terrainTarget, _resetRadius);
         ApplyVisualColorForTarget(_terrainTarget);
@@ -267,8 +267,25 @@ public class TerrainMistileBehaviour : MonoBehaviour
         }
 
         terrainTarget = zdo.GetVec3(TerrainSourceZdoKey, transform.position);
-        resetRadius = zdo.GetFloat(ResetRadiusZdoKey);
+        if (!TerrainMistileSystem.IsFinite(terrainTarget))
+        {
+            terrainTarget = default;
+            resetRadius = _resetRadius;
+            return false;
+        }
+
+        resetRadius = NormalizeResetRadius(zdo.GetFloat(ResetRadiusZdoKey));
         return true;
+    }
+
+    private float NormalizeResetRadius(float resetRadius)
+    {
+        if (float.IsNaN(resetRadius) || float.IsInfinity(resetRadius))
+        {
+            return _resetRadius;
+        }
+
+        return Mathf.Clamp(resetRadius, 0.1f, TerrainMistileSpawnRules.MaximumResetRadius);
     }
 
     private void MoveTowardTerrainTarget()

@@ -9,14 +9,6 @@ using UnityEngine;
 namespace TerrainMistile;
 
 [HarmonyPatch(typeof(TextsDialog), "UpdateTextsList")]
-internal static class TerrainMistileTextsDialogUpdateTextsListPatch
-{
-    private static void Postfix(TextsDialog __instance)
-    {
-        TerrainMistileCompendium.AddPage(__instance);
-    }
-}
-
 internal static class TerrainMistileCompendium
 {
     private const string PageTopic = "TerrainMistile";
@@ -34,7 +26,12 @@ internal static class TerrainMistileCompendium
         new(Heightmap.Biome.Ocean, "Ocean")
     };
 
-    internal static void AddPage(TextsDialog dialog)
+    private static void Postfix(TextsDialog __instance)
+    {
+        AddPage(__instance);
+    }
+
+    private static void AddPage(TextsDialog dialog)
     {
         if (dialog == null || dialog.m_texts == null)
         {

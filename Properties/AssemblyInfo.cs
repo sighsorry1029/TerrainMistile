@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using TerrainMistile;
 
@@ -34,3 +35,4 @@ using TerrainMistile;
 // [assembly: AssemblyVersion("1.0.*")]
 [assembly: AssemblyVersion(TerrainMistilePlugin.ModVersion)]
 [assembly: AssemblyFileVersion(TerrainMistilePlugin.ModVersion)]
+[assembly: InternalsVisibleTo("TerrainMistile.Tests")]

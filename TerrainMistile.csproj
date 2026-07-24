@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')"/>
-    <Import Project="environment.props"/>
+    <Import Project="environment.props" Condition="Exists('environment.props')"/>
     <PropertyGroup>
         <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
         <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -12,8 +12,11 @@
         <AssemblyName>TerrainMistile</AssemblyName>
         <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
-        <LangVersion>preview</LangVersion>
+        <LangVersion>10.0</LangVersion>
         <Nullable>enable</Nullable>
+        <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+        <PackageMod Condition="'$(PackageMod)' == '' AND '$(Configuration)|$(Platform)' == 'Release|AnyCPU' AND '$(OS)' == 'Windows_NT'">true</PackageMod>
+        <PackageMod Condition="'$(PackageMod)' == ''">false</PackageMod>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -24,7 +27,6 @@
         <DefineConstants>DEBUG;TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -34,11 +36,11 @@
         <DefineConstants>TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <Choose>
         <When Condition="($(OS) == 'Unix' OR $(OS) == 'OSX') AND $(GamePath) == ''">
             <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)') AND Exists('$(ValheimGamePath)')">$(ValheimGamePath)</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/.steam/steam/steamapps/common/Valheim</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim/Contents/MacOS</GamePath>
                 <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
@@ -47,10 +49,10 @@
         </When>
         <When Condition="($(OS) == 'Windows_NT') AND $(GamePath) == ''">
             <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)') AND Exists('$(ValheimGamePath)')">$(ValheimGamePath)</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 892970', 'InstallLocation', null, RegistryView.Registry64, RegistryView.Registry32))</GamePath>
                 <_SteamLibraryPath>$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', null, RegistryView.Registry32))</_SteamLibraryPath>
                 <GamePath Condition="!Exists('$(GamePath)') AND '$(_SteamLibraryPath)' != ''">$(_SteamLibraryPath)\steamapps\common\Valheim</GamePath>
-                <GamePath Condition="!Exists('$(GamePath)') AND Exists('$(ValheimGamePath)')">$(ValheimGamePath)</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files\Steam\steamapps\common\Valheim</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
                 <GamePath Condition="!Exists('$(GamePath)')">D:\SteamLibrary\steamapps\common\Valheim</GamePath>
@@ -58,10 +60,12 @@
                 <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
                 <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\unstripped_corlib</CorlibPath>
                 <PublicizedAssembliesPath Condition="!Exists('$(PublicizedAssembliesPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
-                <AfterTargets Condition="'$(AfterTargets)' == ''">ILRepacker</AfterTargets>
             </PropertyGroup>
         </When>
     </Choose>
+    <PropertyGroup>
+        <CopyOutputDLLPath Condition="'$(CopyOutputDLLPath)' == '' AND Exists('$(BepInExPath)')">$(BepInExPath)\plugins</CopyOutputDLLPath>
+    </PropertyGroup>
     <ItemGroup>
         <Reference Include="0Harmony">
             <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
@@ -117,7 +121,7 @@
             <HintPath>$(GamePath)\valheim_Data\Managed\Unity.TextMeshPro.dll</HintPath>
         </Reference>
         <Reference Include="YamlDotNet">
-            <HintPath>$(UserProfile)\.nuget\packages\yamldotnet\16.3.0\lib\net47\YamlDotNet.dll</HintPath>
+            <HintPath>$(PkgYamlDotNet)\lib\net47\YamlDotNet.dll</HintPath>
         </Reference>
     </ItemGroup>
     <ItemGroup>
@@ -134,7 +138,7 @@
     </ItemGroup>
     <ItemGroup>
         <Content Include=".gitignore"/>
-        <Content Include="environment.props"/>
+        <Content Include="environment.props.example"/>
         <Content Include="ILRepack.targets"/>
         <Content Include="Libs\ServerSync.dll">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -148,28 +152,27 @@
         <Content Include="UpdateManifest.ps1"/>
     </ItemGroup>
     <ItemGroup>
-        <None Include="App.config"/>
-    </ItemGroup>
-    <ItemGroup>
         <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.44.1">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="YamlDotNet" Version="16.3.0" />
+        <PackageReference Include="YamlDotNet" Version="16.3.0" GeneratePathProperty="true" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
-    <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
-         Other similar extension points exist, see Microsoft.Common.targets.
-    <Target Name="BeforeBuild">
+    <Target Name="ValidateRequestedBuildActions" BeforeTargets="Build" Condition="'$(DeployToGame)' == 'true' OR '$(PackageMod)' == 'true'">
+        <Error Text="PackageMod requires Release|AnyCPU." Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' != 'Release|AnyCPU'"/>
+        <Error Text="PackageMod currently requires Windows because UpdateManifest.ps1 is run with powershell.exe." Condition="'$(PackageMod)' == 'true' AND '$(OS)' != 'Windows_NT'"/>
+        <PropertyGroup>
+            <_TerrainMistileBuildActionsValidated>true</_TerrainMistileBuildActionsValidated>
+        </PropertyGroup>
     </Target>
-    <Target Name="AfterBuild">
+    <Target Name="RejectDirectBuildActionTargets"
+            BeforeTargets="DeployToGame;PrepareThunderstorePackage;MakeThunderstorePackage;MakeNexusPackage"
+            Condition="'$(DeployToGame)' == 'true' OR '$(PackageMod)' == 'true'">
+        <Error Text="Run the Build target; deployment and packaging targets cannot be invoked directly."
+               Condition="'$(_TerrainMistileBuildActionsValidated)' != 'true'"/>
     </Target>
-    -->
-    <UsingTask AssemblyFile="KeyManager.dll" TaskName="KeyManager.Seal" Condition="'$(AfterTargets)' == 'KeyManager'"/>
-    <Target Name="KeyManager" AfterTargets="ILRepack" Condition="'$(AfterTargets)' == 'KeyManager'">
-        <Seal DLL="$(TargetPath)"/>
-    </Target>
-    <Target Name="GetAssemblyVersion" AfterTargets="$(AfterTargets)">
+    <Target Name="GetAssemblyVersion" AfterTargets="ILRepacker" Condition="'$(DeployToGame)' == 'true' OR '$(PackageMod)' == 'true'">
         <GetAssemblyIdentity AssemblyFiles="$(TargetPath)">
             <Output TaskParameter="Assemblies" ItemName="Targets"/>
         </GetAssemblyIdentity>
@@ -185,54 +188,47 @@
             <PackageName>$(AssemblyName)_v$(Major).$(Minor).$(Patch)</PackageName>
             <PackageVersion>$(Major).$(Minor).$(Patch)</PackageVersion>
             <VersionString>$(Major).$(Minor).$(Patch)</VersionString>
-            <PackageDir>$(ProjectDir)\Thunderstore\$(PackageName)</PackageDir>
+            <PackageDir>$(IntermediateOutputPath)packages\Thunderstore\$(PackageName)</PackageDir>
+            <NexusPackageDir>$(IntermediateOutputPath)packages\Nexus\$(PackageName)</NexusPackageDir>
         </PropertyGroup>
     </Target>
-    <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion">
+    <Target Name="DeployToGame" AfterTargets="GetAssemblyVersion" Condition="'$(DeployToGame)' == 'true'">
         <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
+        <Error Text="CopyOutputDLLPath is not configured. Set it in environment.props or pass it as an MSBuild property." Condition="'$(CopyOutputDLLPath)' == ''"/>
+        <Error Text="CopyOutputDLLPath does not exist: $(CopyOutputDLLPath)" Condition="!Exists('$(CopyOutputDLLPath)')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
     </Target>
-    <Target Name="CopyReadMeToTSFolder" AfterTargets="CopyOutputDLL" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
-        <Warning Text="README.md not found in project directory. A default README.md file will be created for the Thunderstore package" Condition="!Exists('README.md')"/>
-        <WriteLinesToFile File="README.md" Lines="Default Readme file from one of Azumatt's Templates. Replace this with actual content." Overwrite="false" Condition="!Exists('README.md')"/>
+    <Target Name="PrepareThunderstorePackage" AfterTargets="GetAssemblyVersion" Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+        <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
+        <Error Text="README.md not found in project directory." Condition="!Exists('README.md')"/>
+        <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\manifest.json')"/>
+        <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\CHANGELOG.md')"/>
+        <Error Text="icon.png not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\icon.png')"/>
+        <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)UpdateManifest.ps1&quot; -manifestFile &quot;$(ProjectDir)Thunderstore\manifest.json&quot; -versionString &quot;$(PackageVersion)&quot;"/>
         <RemoveDir Directories="$(PackageDir)" Condition="Exists('$(PackageDir)')"/>
         <MakeDir Directories="$(PackageDir)"/>
-        <Copy SourceFiles="README.md" DestinationFolder="$(PackageDir)" OverwriteReadOnlyFiles="true"/>
-    </Target>
-    <Target Name="UpdateManifestVersion" AfterTargets="CopyReadMeToTSFolder" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
-        <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\manifest.json')"/>
         <ItemGroup>
-            <ManifestFile Include="$(ProjectDir)Thunderstore\manifest.json"/>
+            <ThunderstorePackageFiles Include="$(TargetDir)$(AssemblyName).dll"/>
+            <ThunderstorePackageFiles Include="$(ProjectDir)README.md"/>
+            <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\CHANGELOG.md"/>
+            <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\manifest.json"/>
+            <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\icon.png"/>
         </ItemGroup>
-        <Message Text="ManifestFile is @(ManifestFile)"/>
-        <Message Text="Updating version number in Thunderstore\manifest.json" Condition="Exists(@(ManifestFile))"/>
-        <Exec Command="powershell.exe -ExecutionPolicy Bypass -Command &quot;&amp; { &amp; '$(ProjectDir)UpdateManifest.ps1' -manifestFile '@(ManifestFile)' -versionString '$(PackageVersion)' }&quot;"/>
+        <Copy SourceFiles="@(ThunderstorePackageFiles)" DestinationFolder="$(PackageDir)" OverwriteReadOnlyFiles="true"/>
     </Target>
-    <Target Name="MakeThunderstorePackage" AfterTargets="UpdateManifestVersion" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-        <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)\Thunderstore\manifest.json')"/>
-        <Error Text="icon.png not found in Thunderstore directory. Please note that Thunderstore requires this image to be 256x256 in dimension" Condition="!Exists('$(ProjectDir)\Thunderstore\icon.png')"/>
-        <ItemGroup>
-            <PackageFiles Include="$(TargetDir)$(AssemblyName).dll" Condition="Exists('$(TargetDir)$(AssemblyName).dll')"/>
-            <PackageFiles Include="$(ProjectDir)\Thunderstore\CHANGELOG.md" Condition="Exists('$(ProjectDir)\Thunderstore\CHANGELOG.md')"/>
-            <PackageFiles Include="$(ProjectDir)\Thunderstore\manifest.json" Condition="Exists('$(ProjectDir)\Thunderstore\manifest.json')"/>
-            <PackageFiles Include="$(ProjectDir)\Thunderstore\icon.png" Condition="Exists('$(ProjectDir)\Thunderstore\icon.png')"/>
-        </ItemGroup>
-        <MakeDir Directories="$(PackageDir)"/>
-        <Copy SourceFiles="@(PackageFiles)" DestinationFolder="$(PackageDir)"/>
+    <Target Name="MakeThunderstorePackage" AfterTargets="PrepareThunderstorePackage" Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
         <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="Thunderstore\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageDir)"/>
     </Target>
-    <Target Name="MakeNexusPackage" AfterTargets="MakeThunderstorePackage" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Target Name="MakeNexusPackage" AfterTargets="MakeThunderstorePackage" Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
         <MakeDir Directories="$(ProjectDir)\Nexus"/>
-        <ItemGroup>
-            <NexusPackageFiles Include="$(TargetDir)$(AssemblyName).dll;"/>
-        </ItemGroup>
-        <MakeDir Directories="$(PackageDir)"/>
-        <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(PackageDir)"/>
-        <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="Nexus\$(PackageName).zip" Overwrite="true"/>
-        <RemoveDir Directories="$(PackageDir)"/>
+        <RemoveDir Directories="$(NexusPackageDir)" Condition="Exists('$(NexusPackageDir)')"/>
+        <MakeDir Directories="$(NexusPackageDir)"/>
+        <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(NexusPackageDir)"/>
+        <ZipDirectory SourceDirectory="$(NexusPackageDir)" DestinationFile="Nexus\$(PackageName).zip" Overwrite="true"/>
+        <RemoveDir Directories="$(NexusPackageDir)"/>
     </Target>
 
 </Project>

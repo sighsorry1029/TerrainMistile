@@ -15,14 +15,14 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.5";
+    internal const string ModVersion = "1.0.6";
     internal const string Author = "sighsorry";
     internal const string DefaultDisplayName = "Earth Warden";
     private const string ModGUID = $"{Author}.{ModName}";
-    private static string ConfigFileName = $"{ModGUID}.cfg";
-    private static string ConfigFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + ConfigFileName;
-    private static string SpawnRulesFileName = $"{ModName}.yml";
-    internal static string SpawnRulesFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + SpawnRulesFileName;
+    private const string ConfigFileName = $"{ModGUID}.cfg";
+    private const string SpawnRulesFileName = $"{ModName}.yml";
+    private static readonly string ConfigFileFullPath = Path.Combine(Paths.ConfigPath, ConfigFileName);
+    private static readonly string SpawnRulesFileFullPath = Path.Combine(Paths.ConfigPath, SpawnRulesFileName);
     private readonly Harmony _harmony = new(ModGUID);
     public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     private static readonly ConfigSync ConfigSync = new(ModGUID)
@@ -46,7 +46,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private DateTime _lastConfigReloadTime;
     private DateTime _lastSpawnRulesReloadTime;
     private string? _lastConfigFileText;
-    private string? _lastSpawnRulesYamlText;
+    private string? _appliedSpawnRulesYamlText;
     private const long RELOAD_DELAY = 10000000; // One second
 
     public enum Toggle
@@ -69,7 +69,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         SpawnRulesYaml = new CustomSyncedValue<string>(ConfigSync, "SpawnRulesYaml", string.Empty);
         SpawnRulesYaml.ValueChanged += OnSyncedSpawnRulesYamlChanged;
         ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
-        TerrainMistileSpawnRules.LoadYamlText(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
+        ApplySpawnRulesYaml(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
 
         TerrainMistilePrefab.RegisterPrefabHook();
 
@@ -84,7 +84,6 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
         Config.Save();
         _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
-        _lastSpawnRulesYamlText = ReadFileTextIfExists(SpawnRulesFileFullPath);
         if (saveOnSet)
         {
             Config.SaveOnConfigSet = saveOnSet;
@@ -106,6 +105,12 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         TerrainMistileSystem.UpdateResetEffectRpcRegistration();
         TerrainMistileSystem.UpdateProtectedTerrainAreaSync();
         TerrainMistileExternalTerrainCompat.Update();
+        if (TerrainMistileExternalTerrainCompat.ConsumeBiomeMappingRefreshRequest() &&
+            _appliedSpawnRulesYamlText != null)
+        {
+            ApplySpawnRulesYaml(_appliedSpawnRulesYamlText, "Expand World Data biome refresh");
+        }
+
         TerrainMistileSystem.UpdatePersistentTerrainSpawns();
     }
 
@@ -206,15 +211,14 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     {
         TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
         string yaml = File.ReadAllText(SpawnRulesFileFullPath);
-        if (string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal) &&
+        if (string.Equals(_appliedSpawnRulesYamlText, yaml, StringComparison.Ordinal) &&
             string.Equals(SpawnRulesYaml.Value ?? string.Empty, yaml, StringComparison.Ordinal))
         {
             return;
         }
 
-        if (TerrainMistileSpawnRules.LoadYamlText(yaml, "local file"))
+        if (ApplySpawnRulesYaml(yaml, "local file"))
         {
-            _lastSpawnRulesYamlText = yaml;
             if (!string.Equals(SpawnRulesYaml.Value ?? string.Empty, yaml, StringComparison.Ordinal))
             {
                 SpawnRulesYaml.Value = yaml;
@@ -225,15 +229,12 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private void OnSyncedSpawnRulesYamlChanged()
     {
         string yaml = SpawnRulesYaml.Value ?? string.Empty;
-        if (string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal))
+        if (string.Equals(_appliedSpawnRulesYamlText, yaml, StringComparison.Ordinal))
         {
             return;
         }
 
-        if (TerrainMistileSpawnRules.LoadYamlText(yaml, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync"))
-        {
-            _lastSpawnRulesYamlText = yaml;
-        }
+        ApplySpawnRulesYaml(yaml, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync");
     }
 
     private void OnSourceOfTruthChanged(bool isSourceOfTruth)
@@ -245,11 +246,24 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         }
 
         string yaml = SpawnRulesYaml.Value ?? string.Empty;
-        if (!string.Equals(_lastSpawnRulesYamlText, yaml, StringComparison.Ordinal) &&
-            TerrainMistileSpawnRules.LoadYamlText(yaml, "server sync"))
+        if (!string.Equals(_appliedSpawnRulesYamlText, yaml, StringComparison.Ordinal))
         {
-            _lastSpawnRulesYamlText = yaml;
+            ApplySpawnRulesYaml(yaml, "server sync");
         }
+    }
+
+    private bool ApplySpawnRulesYaml(string yaml, string source)
+    {
+        TerrainMistileExpandWorldDataBiomeCompat.InvalidateFileMapping();
+        if (!TerrainMistileSpawnRules.LoadYamlText(yaml, source))
+        {
+            return false;
+        }
+
+        _appliedSpawnRulesYamlText = yaml;
+        TerrainMistileSystem.InvalidateSpawnRuleState();
+        TerrainMistilePrefab.RefreshRegisteredPrefabVisuals();
+        return true;
     }
 
     private static string? ReadFileTextIfExists(string path)
@@ -275,7 +289,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     private static ConfigEntry<Toggle> _serverConfigLocked = null!;
     private static ConfigEntry<string> _displayName = null!;
-    internal static CustomSyncedValue<string> SpawnRulesYaml = null!;
+    private static CustomSyncedValue<string> SpawnRulesYaml = null!;
 
     private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
     {

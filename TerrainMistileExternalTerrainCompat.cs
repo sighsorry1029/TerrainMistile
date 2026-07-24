@@ -15,8 +15,10 @@ internal static class TerrainMistileExternalTerrainCompat
     private const string ExpandWorldDataLocationExtraTypeName = "ExpandWorldData.LocationExtra";
     private const string ExpandWorldDataBlueprintManagerTypeName = "ExpandWorldData.BlueprintManager";
     private const string ExpandWorldDataNoBuildManagerTypeName = "ExpandWorldData.NoBuildManager";
+    private const string ExpandWorldDataBiomeManagerTypeName = "ExpandWorldData.BiomeManager";
     private const string BlueprintProtectedSourcePrefix = "Expand World Data blueprint terrain";
     private const float PatchRetryInterval = 2f;
+    private const float MissingDependencyRetryInterval = 10f;
     private const int MaxPatchAttempts = 15;
 
     private static readonly Dictionary<string, Type> LoadedTypes = new(StringComparer.Ordinal);
@@ -25,6 +27,12 @@ internal static class TerrainMistileExternalTerrainCompat
     private static Harmony? _harmony;
     private static bool _terrainPatched;
     private static bool _protectionSyncPatched;
+    private static bool _biomeMappingRefreshPatched;
+    private static bool _biomeNamesFromFilePatched;
+    private static bool _biomeSetNamesPatched;
+    private static bool _biomeLoadPatched;
+    private static bool _biomeMappingRefreshRequested;
+    private static bool _expandWorldDataDetected;
     private static bool _blueprintReflectionResolved;
     private static int _patchAttempts;
     private static float _nextPatchAttemptTime;
@@ -35,39 +43,59 @@ internal static class TerrainMistileExternalTerrainCompat
     {
         _logger = logger;
         _harmony = harmony;
-        if (!IsExpandWorldDataLoaded())
-        {
-            _patchAttempts = MaxPatchAttempts;
-            return;
-        }
-
-        TryPatch();
-        _nextPatchAttemptTime = Time.time + PatchRetryInterval;
+        bool dependencyLoaded = TryPatch();
+        _nextPatchAttemptTime = Time.time +
+                                (dependencyLoaded ? PatchRetryInterval : MissingDependencyRetryInterval);
     }
 
     public static void Update()
     {
-        if ((_terrainPatched && _protectionSyncPatched) ||
+        if ((_terrainPatched && _protectionSyncPatched && _biomeMappingRefreshPatched) ||
             _patchAttempts >= MaxPatchAttempts ||
             Time.time < _nextPatchAttemptTime)
         {
             return;
         }
 
-        _nextPatchAttemptTime = Time.time + PatchRetryInterval;
-        TryPatch();
+        bool dependencyLoaded = TryPatch();
+        _nextPatchAttemptTime = Time.time +
+                                (dependencyLoaded ? PatchRetryInterval : MissingDependencyRetryInterval);
     }
 
-    private static void TryPatch()
+    internal static bool ConsumeBiomeMappingRefreshRequest()
+    {
+        if (!_biomeMappingRefreshRequested)
+        {
+            return false;
+        }
+
+        _biomeMappingRefreshRequested = false;
+        return true;
+    }
+
+    private static bool TryPatch()
     {
         if (_harmony == null || _patchAttempts >= MaxPatchAttempts)
         {
-            return;
+            return false;
+        }
+
+        if (FindLoadedType(ExpandWorldDataBiomeManagerTypeName) == null)
+        {
+            return false;
+        }
+
+        if (!_expandWorldDataDetected)
+        {
+            _expandWorldDataDetected = true;
+            _biomeMappingRefreshRequested = true;
         }
 
         _patchAttempts++;
         TryPatchTerrainHandler();
         TryPatchBlueprintProtectionSync();
+        TryPatchBiomeMappingRefresh();
+        return true;
     }
 
     private static void TryPatchTerrainHandler()
@@ -121,10 +149,117 @@ internal static class TerrainMistileExternalTerrainCompat
 
         _harmony.Patch(target, postfix: new HarmonyMethod(patch));
         _protectionSyncPatched = true;
+        if (ZNet.instance != null &&
+            ZNet.instance.IsServer() &&
+            ZoneSystem.instance &&
+            ZoneSystem.instance.m_locationInstances.Count > 0)
+        {
+            SyncBlueprintProtectedAreas();
+        }
+
         _logger?.LogInfo("Expand World Data blueprint terrain protection initialized.");
     }
 
-    private static Type? FindLoadedType(string fullName)
+    private static void TryPatchBiomeMappingRefresh()
+    {
+        if (_biomeMappingRefreshPatched || _harmony == null)
+        {
+            return;
+        }
+
+        Type? biomeManagerType = FindLoadedType(ExpandWorldDataBiomeManagerTypeName);
+        if (biomeManagerType == null)
+        {
+            return;
+        }
+
+        MethodInfo? patch = AccessTools.Method(
+            typeof(TerrainMistileExternalTerrainCompat),
+            nameof(BiomeMappingChangedPostfix));
+        if (patch == null)
+        {
+            return;
+        }
+
+        HarmonyMethod postfix = new(patch);
+        List<string> unavailableMethods = new();
+        TryPatchBiomeMappingRefreshMethod(
+            biomeManagerType,
+            "NamesFromFile",
+            Type.EmptyTypes,
+            postfix,
+            ref _biomeNamesFromFilePatched,
+            unavailableMethods);
+        TryPatchBiomeMappingRefreshMethod(
+            biomeManagerType,
+            "SetNames",
+            parameterTypes: null,
+            postfix,
+            ref _biomeSetNamesPatched,
+            unavailableMethods);
+        TryPatchBiomeMappingRefreshMethod(
+            biomeManagerType,
+            "Load",
+            new[] { typeof(string) },
+            postfix,
+            ref _biomeLoadPatched,
+            unavailableMethods);
+
+        _biomeMappingRefreshPatched =
+            _biomeNamesFromFilePatched &&
+            _biomeSetNamesPatched &&
+            _biomeLoadPatched;
+        if (_biomeMappingRefreshPatched)
+        {
+            _logger?.LogInfo("Expand World Data biome mapping refresh initialized.");
+        }
+        else if (_patchAttempts >= MaxPatchAttempts)
+        {
+            _logger?.LogWarning(
+                "Expand World Data biome mapping refresh is only partially available. " +
+                $"Unavailable methods: {string.Join(", ", unavailableMethods)}.");
+        }
+    }
+
+    private static void TryPatchBiomeMappingRefreshMethod(
+        Type biomeManagerType,
+        string methodName,
+        Type[]? parameterTypes,
+        HarmonyMethod postfix,
+        ref bool patched,
+        List<string> unavailableMethods)
+    {
+        if (patched || _harmony == null)
+        {
+            return;
+        }
+
+        try
+        {
+            MethodInfo? target = parameterTypes == null
+                ? AccessTools.Method(biomeManagerType, methodName)
+                : AccessTools.Method(biomeManagerType, methodName, parameterTypes);
+            if (target == null)
+            {
+                unavailableMethods.Add(methodName);
+                return;
+            }
+
+            _harmony.Patch(target, postfix: postfix);
+            patched = true;
+        }
+        catch (Exception ex)
+        {
+            unavailableMethods.Add($"{methodName} ({ex.Message})");
+        }
+    }
+
+    private static void BiomeMappingChangedPostfix()
+    {
+        _biomeMappingRefreshRequested = true;
+    }
+
+    internal static Type? FindLoadedType(string fullName)
     {
         if (LoadedTypes.TryGetValue(fullName, out Type cachedType))
         {
@@ -151,26 +286,6 @@ internal static class TerrainMistileExternalTerrainCompat
         }
 
         return null;
-    }
-
-    private static bool IsExpandWorldDataLoaded()
-    {
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            try
-            {
-                if (string.Equals(assembly.GetName().Name, "ExpandWorldData", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            catch
-            {
-                // Ignore dynamic assemblies that cannot expose their name.
-            }
-        }
-
-        return false;
     }
 
     private static void HandleTerrainPrefix(Vector3 pos, float radius, bool isBlueprint, object data)
@@ -325,11 +440,11 @@ internal static class TerrainMistileExternalTerrainCompat
         return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null;
     }
 
-    private static float GetTerrainRadius(float exteriorRadius, bool isBlueprint, object data)
+    internal static float GetTerrainRadius(float exteriorRadius, bool isBlueprint, object data)
     {
         string levelArea = GetString(data, "levelArea");
         string paint = GetString(data, "paint");
-        bool level = levelArea.Length == 0 ? isBlueprint : !levelArea.Equals("false", StringComparison.OrdinalIgnoreCase);
+        bool level = levelArea.Length == 0 ? isBlueprint : !levelArea.Equals("false", StringComparison.Ordinal);
         float radius = 0f;
 
         if (level)

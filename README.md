@@ -141,3 +141,20 @@ Examples:
 - Increase `playerSearchRadius` if changed terrain should stay active from farther away.
 - Increase `resetRadius` for tall or wide terrain edits that need a larger reset area.
 - Raise `playerBaseValue` in dangerous biomes if simple one-piece bases should not fully suppress spawns.
+
+## Development
+
+Copy `environment.props.example` to `environment.props` to select a specific Valheim installation or when automatic detection fails, then set `ValheimGamePath`.
+
+`TerrainMistilePlugin.ModVersion` is the release version source. On Windows, a Release build updates the source Thunderstore manifest when needed, then creates both Thunderstore and Nexus archives:
+
+```powershell
+dotnet test .\TerrainMistile.sln -c Debug
+dotnet build .\TerrainMistile.csproj -c Release
+dotnet build .\TerrainMistile.csproj -c Release -p:DeployToGame=true
+dotnet build .\TerrainMistile.csproj -c Release -p:PackageMod=false
+dotnet test .\TerrainMistile.sln -c Release -p:PackageMod=false
+```
+
+`DeployToGame` copies the merged DLL to the configured BepInEx plugins directory. Windows Release packaging is enabled by default; set `PackageMod=false` when only the DLL is needed.
+Deployment and packaging remain properties on the normal `Build` entry point, and internal build-action targets reject direct invocation.

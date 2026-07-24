@@ -24,17 +24,26 @@ internal static class ZoneSystemSpawnLocationPatch
 [HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Destroy), typeof(GameObject))]
 internal static class ZNetSceneDestroyPatch
 {
-    private static void Prefix(object[] __args)
+    private static void Prefix(GameObject __0)
     {
-        if (__args.Length <= 0 || __args[0] is not GameObject go || !go)
+        if (!__0)
         {
             return;
         }
 
-        TerrainMistileBehaviour behaviour = go.GetComponent<TerrainMistileBehaviour>();
+        TerrainMistileBehaviour behaviour = __0.GetComponent<TerrainMistileBehaviour>();
         if (behaviour)
         {
             behaviour.TryResetTerrain();
         }
+    }
+}
+
+[HarmonyPatch(typeof(ZNet), nameof(ZNet.Shutdown))]
+internal static class ZNetShutdownPatch
+{
+    private static void Postfix()
+    {
+        TerrainMistileSystem.ClearWorldState();
     }
 }

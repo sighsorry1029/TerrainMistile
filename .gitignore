@@ -1,6 +1,10 @@
 bin/
 obj/
 /packages/
+/Nexus/
+/Thunderstore/*.zip
+/environment.props
+/Tests/TestResults/
 riderModule.iml
 /_ReSharper.Caches/
 .idea/

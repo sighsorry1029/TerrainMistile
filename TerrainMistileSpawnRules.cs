@@ -27,8 +27,9 @@ internal static class TerrainMistileSpawnRules
     private const float DefaultSpawnAltitude = 8f;
     private const float DefaultResetRadius = 8f;
     private const float DefaultHealth = 1f;
+    internal const float MaximumResetRadius = 64f;
     internal const string DefaultVisualColorHex = "#45FF5A";
-    private static readonly Color FallbackVisualColor = new(0.270f, 1.000f, 0.353f, 1f);
+    private static readonly Color FallbackVisualColor = new(0x45 / 255f, 1f, 0x5A / 255f, 1f);
     private static readonly string[] DefaultPlayerBasePrefabNames =
     {
         "ashwood_bed",
@@ -147,8 +148,6 @@ internal static class TerrainMistileSpawnRules
 
         RecalculateRuntimeState();
         _logger?.LogInfo($"Loaded TerrainMistile spawn rules from {source}. Default={_defaultRule}; overrides={BiomeRules.Count}; playerBasePrefabs={_playerBasePrefabNames.Count}; enabled={_hasEnabledRules}.");
-        TerrainMistileSystem.ClearSpawnUnitRollState();
-        TerrainMistilePrefab.RefreshRegisteredPrefabVisuals();
         return true;
     }
 
@@ -179,7 +178,7 @@ internal static class TerrainMistileSpawnRules
         return string.IsNullOrWhiteSpace(enumName) ? biome.ToString(CultureInfo.InvariantCulture) : enumName;
     }
 
-    private static bool TryParseYaml(
+    internal static bool TryParseYaml(
         string yaml,
         out TerrainMistileBiomeSpawnRule defaultRule,
         out Dictionary<int, TerrainMistileBiomeSpawnRule> parsedRules,
@@ -251,6 +250,11 @@ internal static class TerrainMistileSpawnRules
             if (!TryResolveBiomeKey(key, out int biome))
             {
                 _logger?.LogWarning($"Ignoring unknown biome '{key}' in TerrainMistile spawn rules.");
+                continue;
+            }
+
+            if (biome == 0)
+            {
                 continue;
             }
 
@@ -395,7 +399,7 @@ internal static class TerrainMistileSpawnRules
         }
 
         _logger?.LogWarning("Ignoring invalid playerBasePrefabs value in TerrainMistile spawn rules. Use a YAML list or comma-separated string.");
-        return names;
+        return CreateDefaultPlayerBasePrefabNames();
     }
 
     private static HashSet<string> CreateDefaultPlayerBasePrefabNames()
@@ -436,10 +440,14 @@ internal static class TerrainMistileSpawnRules
     {
         switch (value)
         {
-            case float floatValue:
+            case float floatValue when IsFinite(floatValue):
                 result = floatValue;
                 return true;
-            case double doubleValue:
+            case double doubleValue when
+                !double.IsNaN(doubleValue) &&
+                !double.IsInfinity(doubleValue) &&
+                doubleValue >= -float.MaxValue &&
+                doubleValue <= float.MaxValue:
                 result = (float)doubleValue;
                 return true;
             case decimal decimalValue:
@@ -466,15 +474,13 @@ internal static class TerrainMistileSpawnRules
             case int intValue:
                 result = intValue;
                 return true;
-            case long longValue:
+            case long longValue when longValue is >= int.MinValue and <= int.MaxValue:
                 result = (int)longValue;
                 return true;
             case float floatValue:
-                result = Mathf.RoundToInt(floatValue);
-                return true;
+                return TryRoundToInt(floatValue, out result);
             case double doubleValue:
-                result = (int)Math.Round(doubleValue);
-                return true;
+                return TryRoundToInt(doubleValue, out result);
             case string stringValue:
                 return int.TryParse(stringValue.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
             default:
@@ -513,9 +519,8 @@ internal static class TerrainMistileSpawnRules
             return true;
         }
 
-        if (Enum.TryParse(normalized, ignoreCase: true, out Heightmap.Biome vanillaBiome))
+        if (TerrainMistileExpandWorldDataBiomeCompat.TryGetVanillaBiome(normalized, out biome))
         {
-            biome = (int)vanillaBiome;
             return true;
         }
 
@@ -580,7 +585,7 @@ internal static class TerrainMistileSpawnRules
         spawnRadiusMin = Mathf.Clamp(spawnRadiusMin, 1f, 256f);
         spawnRadiusMax = Mathf.Clamp(spawnRadiusMax, 1f, 256f);
         spawnAltitude = Mathf.Clamp(spawnAltitude, 1f, 64f);
-        resetRadius = Mathf.Clamp(resetRadius, 1f, 64f);
+        resetRadius = Mathf.Clamp(resetRadius, 1f, MaximumResetRadius);
         health = Mathf.Clamp(health, 1f, 10000f);
         if (spawnRadiusMin > spawnRadiusMax)
         {
@@ -588,20 +593,20 @@ internal static class TerrainMistileSpawnRules
         }
 
         return new TerrainMistileBiomeSpawnRule(
-            interval,
-            playerSearchRadius,
-            spawnChance,
-            maxDeformationSpawnChanceBonus,
-            perPlayerSpawn,
-            playerBaseValue,
-            baseCheckRadius,
-            maxSpawn,
-            spawnRadiusMin,
-            spawnRadiusMax,
-            spawnAltitude,
-            resetRadius,
-            health,
-            visualColor);
+            interval: interval,
+            playerSearchRadius: playerSearchRadius,
+            spawnChance: spawnChance,
+            maxDeformationSpawnChanceBonus: maxDeformationSpawnChanceBonus,
+            perPlayerSpawn: perPlayerSpawn,
+            playerBaseValue: playerBaseValue,
+            baseCheckRadius: baseCheckRadius,
+            maxSpawn: maxSpawn,
+            spawnRadiusMin: spawnRadiusMin,
+            spawnRadiusMax: spawnRadiusMax,
+            spawnAltitude: spawnAltitude,
+            resetRadius: resetRadius,
+            health: health,
+            visualColor: visualColor);
     }
 
     private static void RecalculateRuntimeState()
@@ -626,20 +631,20 @@ internal static class TerrainMistileSpawnRules
     private static TerrainMistileBiomeSpawnRule CreateDefaultRule()
     {
         return new TerrainMistileBiomeSpawnRule(
-            DefaultInterval,
-            DefaultPlayerSearchRadius,
-            DefaultSpawnChance,
-            DefaultMaxDeformationSpawnChanceBonus,
-            DefaultPerPlayerSpawn,
-            DefaultPlayerBaseValue,
-            DefaultBaseCheckRadius,
-            DefaultMaxSpawn,
-            DefaultSpawnRadiusMin,
-            DefaultSpawnRadiusMax,
-            DefaultSpawnAltitude,
-            DefaultResetRadius,
-            DefaultHealth,
-            FallbackVisualColor);
+            interval: DefaultInterval,
+            playerSearchRadius: DefaultPlayerSearchRadius,
+            spawnChance: DefaultSpawnChance,
+            maxDeformationSpawnChanceBonus: DefaultMaxDeformationSpawnChanceBonus,
+            perPlayerSpawn: DefaultPerPlayerSpawn,
+            playerBaseValue: DefaultPlayerBaseValue,
+            baseCheckRadius: DefaultBaseCheckRadius,
+            maxSpawn: DefaultMaxSpawn,
+            spawnRadiusMin: DefaultSpawnRadiusMin,
+            spawnRadiusMax: DefaultSpawnRadiusMax,
+            spawnAltitude: DefaultSpawnAltitude,
+            resetRadius: DefaultResetRadius,
+            health: DefaultHealth,
+            visualColor: FallbackVisualColor);
     }
 
     private static bool TryParseSpawnRadius(string value, out float minRadius, out float maxRadius)
@@ -671,18 +676,80 @@ internal static class TerrainMistileSpawnRules
 
     private static bool TryParseFloat(string value, out float result)
     {
-        return float.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+        return float.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out result) &&
+               IsFinite(result);
+    }
+
+    private static bool TryRoundToInt(double value, out int result)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            result = 0;
+            return false;
+        }
+
+        double rounded = Math.Round(value);
+        if (rounded < int.MinValue || rounded > int.MaxValue)
+        {
+            result = 0;
+            return false;
+        }
+
+        result = (int)rounded;
+        return true;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
     private static bool TryParseVisualColor(string value, out Color color)
     {
         string normalized = value.Trim();
-        if (normalized.Length > 0 && normalized[0] != '#')
+        if (normalized.Length > 0 && normalized[0] == '#')
         {
-            normalized = "#" + normalized;
+            normalized = normalized.Substring(1);
         }
 
-        return ColorUtility.TryParseHtmlString(normalized, out color);
+        if (normalized.Length is not (3 or 4 or 6 or 8))
+        {
+            color = default;
+            return false;
+        }
+
+        if (normalized.Length is 3 or 4)
+        {
+            StringBuilder expanded = new(normalized.Length * 2);
+            foreach (char digit in normalized)
+            {
+                expanded.Append(digit).Append(digit);
+            }
+
+            normalized = expanded.ToString();
+        }
+
+        byte alpha = byte.MaxValue;
+        if (!TryParseHexByte(normalized, 0, out byte red) ||
+            !TryParseHexByte(normalized, 2, out byte green) ||
+            !TryParseHexByte(normalized, 4, out byte blue) ||
+            (normalized.Length == 8 && !TryParseHexByte(normalized, 6, out alpha)))
+        {
+            color = default;
+            return false;
+        }
+
+        color = new Color(red / 255f, green / 255f, blue / 255f, alpha / 255f);
+        return true;
+    }
+
+    private static bool TryParseHexByte(string value, int startIndex, out byte result)
+    {
+        return byte.TryParse(
+            value.Substring(startIndex, 2),
+            NumberStyles.HexNumber,
+            CultureInfo.InvariantCulture,
+            out result);
     }
 
     private static string NormalizeBiomeName(string value)
@@ -710,18 +777,18 @@ internal static class TerrainMistileSpawnRules
             "# defaults and playerBasePrefabs are reserved. Every other top-level key is treated as a biome rule.\n" +
             "\n" +
             "defaults:\n" +
-            "  interval: 60 # Seconds between spawn rolls for one 32m terrain unit. 0 disables that biome.\n" +
-            "  playerSearchRadius: 32 # Players within this horizontal radius of a changed terrain unit activate its rolls.\n" +
-            "  spawnChance: 0.25 # Base chance used when the unit interval is ready and at least one player is nearby.\n" +
-            "  maxDeformationSpawnChanceBonus: 0.25 # Added to spawnChance when the largest height deformation in the 32m terrain unit reaches the 8m cap. Scales linearly from 0m to 8m.\n" +
-            "  maxSpawn: 3 # Maximum active TerrainMistiles with targets within 32m of the target. 0 disables that biome.\n" +
-            "  perPlayerSpawn: true # If true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by maxSpawn and available targets.\n" +
-            "  playerBaseValue: 1 # playerBaseValue N skips spawn checks when at least N unique listed player-placed base prefab types are within baseCheckRadius meters horizontally of the changed terrain. 0 disables the PlayerBase check.\n" +
-            "  baseCheckRadius: 24 # Horizontal radius used by playerBaseValue to count listed player-placed base prefab types.\n" +
-            "  spawnRadius: 16~32 # Horizontal spawn distance from the selected nearby player. Use 24 for fixed distance or 16~32 for a random range.\n" +
-            "  spawnAltitude: 8 # Height above solid ground where TerrainMistile spawns.\n" +
-            "  resetRadius: 8 # Radius of terrain height and paint reset when TerrainMistile detonates.\n" +
-            "  health: 1 # Maximum and current health applied when TerrainMistile spawns. Biome rules can override it.\n" +
+            $"  interval: {FormatYamlNumber(DefaultInterval)} # Seconds between spawn rolls for one 32m terrain unit. 0 disables that biome.\n" +
+            $"  playerSearchRadius: {FormatYamlNumber(DefaultPlayerSearchRadius)} # Players within this horizontal radius of a changed terrain unit activate its rolls.\n" +
+            $"  spawnChance: {FormatYamlNumber(DefaultSpawnChance)} # Base chance used when the unit interval is ready and at least one player is nearby.\n" +
+            $"  maxDeformationSpawnChanceBonus: {FormatYamlNumber(DefaultMaxDeformationSpawnChanceBonus)} # Added to spawnChance when the largest height deformation in the 32m terrain unit reaches the 8m cap. Scales linearly from 0m to 8m.\n" +
+            $"  maxSpawn: {DefaultMaxSpawn.ToString(CultureInfo.InvariantCulture)} # Maximum active TerrainMistiles with targets within 32m of the target. 0 disables that biome.\n" +
+            $"  perPlayerSpawn: {(DefaultPerPlayerSpawn ? "true" : "false")} # If true, one successful roll can spawn up to one TerrainMistile per nearby player, capped by maxSpawn and available targets.\n" +
+            $"  playerBaseValue: {DefaultPlayerBaseValue.ToString(CultureInfo.InvariantCulture)} # playerBaseValue N skips spawn checks when at least N unique listed player-placed base prefab types are within baseCheckRadius meters horizontally of the changed terrain. 0 disables the PlayerBase check.\n" +
+            $"  baseCheckRadius: {FormatYamlNumber(DefaultBaseCheckRadius)} # Horizontal radius used by playerBaseValue to count listed player-placed base prefab types.\n" +
+            $"  spawnRadius: {FormatYamlNumber(DefaultSpawnRadiusMin)}~{FormatYamlNumber(DefaultSpawnRadiusMax)} # Horizontal spawn distance from the selected nearby player. Use 24 for fixed distance or 16~32 for a random range.\n" +
+            $"  spawnAltitude: {FormatYamlNumber(DefaultSpawnAltitude)} # Height above solid ground where TerrainMistile spawns.\n" +
+            $"  resetRadius: {FormatYamlNumber(DefaultResetRadius)} # Radius of terrain height and paint reset when TerrainMistile detonates.\n" +
+            $"  health: {FormatYamlNumber(DefaultHealth)} # Maximum and current health applied when TerrainMistile spawns. Biome rules can override it.\n" +
             $"  visualColor: \"{DefaultVisualColorHex}\" # HTML hex color used for TerrainMistile flames, sparks, and light. Biome rules can override it.\n" +
             "Meadows:\n" +
             "  interval: 120\n" +
@@ -760,6 +827,11 @@ internal static class TerrainMistileSpawnRules
             "  visualColor: \"#3EA7FF\"\n" +
             "\n" +
             BuildDefaultPlayerBasePrefabsYaml();
+    }
+
+    private static string FormatYamlNumber(float value)
+    {
+        return value.ToString("0.###", CultureInfo.InvariantCulture);
     }
 
     private sealed class TerrainMistileSpawnRuleValues
@@ -806,9 +878,13 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
     private static readonly Dictionary<string, int> FileNameToBiome = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<int, string> FileBiomeToName = new();
     private static bool _fileMappingLoaded;
-    private static bool _reflectionMethodsResolved;
     private static MethodInfo? _tryGetBiomeMethod;
     private static MethodInfo? _tryGetDisplayNameMethod;
+
+    internal static bool TryGetVanillaBiome(string name, out int biome)
+    {
+        return OriginalBiomes.TryGetValue(name, out biome);
+    }
 
     internal static bool TryGetBiome(string name, out int biome)
     {
@@ -842,17 +918,47 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
     private static bool TryGetBiomeFromExpandWorldData(string name, out int biome)
     {
         biome = 0;
-        EnsureReflectionMethods();
-        if (_tryGetBiomeMethod == null)
-        {
-            return false;
-        }
-
-        ParameterInfo[] parameters = _tryGetBiomeMethod.GetParameters();
-        object[] args = { name, Enum.ToObject(parameters[1].ParameterType.GetElementType() ?? parameters[1].ParameterType, 0) };
         try
         {
-            if (_tryGetBiomeMethod.Invoke(null, args) is bool result && result)
+            MethodInfo? method = _tryGetBiomeMethod;
+            if (method == null)
+            {
+                Type? biomeManager =
+                    TerrainMistileExternalTerrainCompat.FindLoadedType("ExpandWorldData.BiomeManager");
+                if (biomeManager == null)
+                {
+                    return false;
+                }
+
+                method = biomeManager.GetMethod(
+                    "TryGetBiome",
+                    BindingFlags.Public | BindingFlags.Static);
+                _tryGetBiomeMethod = method;
+            }
+
+            if (method == null)
+            {
+                return false;
+            }
+
+            ParameterInfo[] parameters = method.GetParameters();
+            Type? biomeType = parameters.Length == 2
+                ? parameters[1].ParameterType.GetElementType()
+                : null;
+            if (method.ReturnType != typeof(bool) ||
+                parameters.Length != 2 ||
+                parameters[0].ParameterType != typeof(string) ||
+                !parameters[1].ParameterType.IsByRef ||
+                !parameters[1].IsOut ||
+                biomeType == null ||
+                !biomeType.IsEnum)
+            {
+                _tryGetBiomeMethod = null;
+                return false;
+            }
+
+            object[] args = { name, Enum.ToObject(biomeType, 0) };
+            if (method.Invoke(null, args) is bool result && result)
             {
                 biome = Convert.ToInt32(args[1], CultureInfo.InvariantCulture);
                 return true;
@@ -869,18 +975,46 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
     private static bool TryGetDisplayNameFromExpandWorldData(int biome, out string name)
     {
         name = "";
-        EnsureReflectionMethods();
-        if (_tryGetDisplayNameMethod == null)
-        {
-            return false;
-        }
-
-        ParameterInfo[] parameters = _tryGetDisplayNameMethod.GetParameters();
-        Type biomeType = parameters[0].ParameterType;
-        object[] args = { Enum.ToObject(biomeType, biome), "" };
         try
         {
-            if (_tryGetDisplayNameMethod.Invoke(null, args) is bool result && result && args[1] is string displayName && !string.IsNullOrWhiteSpace(displayName))
+            MethodInfo? method = _tryGetDisplayNameMethod;
+            if (method == null)
+            {
+                Type? biomeManager =
+                    TerrainMistileExternalTerrainCompat.FindLoadedType("ExpandWorldData.BiomeManager");
+                if (biomeManager == null)
+                {
+                    return false;
+                }
+
+                method = biomeManager.GetMethod(
+                    "TryGetDisplayName",
+                    BindingFlags.Public | BindingFlags.Static);
+                _tryGetDisplayNameMethod = method;
+            }
+
+            if (method == null)
+            {
+                return false;
+            }
+
+            ParameterInfo[] parameters = method.GetParameters();
+            if (method.ReturnType != typeof(bool) ||
+                parameters.Length != 2 ||
+                !parameters[0].ParameterType.IsEnum ||
+                !parameters[1].ParameterType.IsByRef ||
+                !parameters[1].IsOut ||
+                parameters[1].ParameterType.GetElementType() != typeof(string))
+            {
+                _tryGetDisplayNameMethod = null;
+                return false;
+            }
+
+            object[] args = { Enum.ToObject(parameters[0].ParameterType, biome), "" };
+            if (method.Invoke(null, args) is bool result &&
+                result &&
+                args[1] is string displayName &&
+                !string.IsNullOrWhiteSpace(displayName))
             {
                 name = displayName;
                 return true;
@@ -894,44 +1028,6 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
         return false;
     }
 
-    private static void EnsureReflectionMethods()
-    {
-        if (_reflectionMethodsResolved)
-        {
-            return;
-        }
-
-        _reflectionMethodsResolved = true;
-
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            AssemblyName assemblyName;
-            try
-            {
-                assemblyName = assembly.GetName();
-            }
-            catch
-            {
-                continue;
-            }
-
-            if (!string.Equals(assemblyName.Name, "ExpandWorldData", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            Type? biomeManager = assembly.GetType("ExpandWorldData.BiomeManager", throwOnError: false);
-            if (biomeManager == null)
-            {
-                continue;
-            }
-
-            _tryGetBiomeMethod ??= biomeManager.GetMethod("TryGetBiome", BindingFlags.Public | BindingFlags.Static);
-            _tryGetDisplayNameMethod ??= biomeManager.GetMethod("TryGetDisplayName", BindingFlags.Public | BindingFlags.Static);
-            return;
-        }
-    }
-
     private static void EnsureFileMappingLoaded()
     {
         if (_fileMappingLoaded)
@@ -939,29 +1035,91 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
             return;
         }
 
-        _fileMappingLoaded = true;
-        foreach (KeyValuePair<string, int> biome in OriginalBiomes)
+        string configPath = Paths.ConfigPath;
+        string directory = string.IsNullOrWhiteSpace(configPath)
+            ? ""
+            : Path.Combine(configPath, "expand_world");
+        bool mappingBuilt = TryBuildFileMapping(
+                directory,
+                out Dictionary<string, int> nameToBiome,
+                out Dictionary<int, string> biomeToName,
+                out string warning);
+        if (!mappingBuilt)
         {
-            AddFileBiomeName(biome.Key, biome.Value);
+            _fileMappingLoaded = true;
+            if (warning.Length > 0)
+            {
+                TerrainMistilePlugin.TerrainMistileLogger.LogWarning(warning);
+            }
+
+            return;
         }
 
-        string directory = Path.Combine(Paths.ConfigPath, "expand_world");
+        FileNameToBiome.Clear();
+        foreach (KeyValuePair<string, int> entry in nameToBiome)
+        {
+            FileNameToBiome[entry.Key] = entry.Value;
+        }
+
+        FileBiomeToName.Clear();
+        foreach (KeyValuePair<int, string> entry in biomeToName)
+        {
+            FileBiomeToName[entry.Key] = entry.Value;
+        }
+
+        _fileMappingLoaded = true;
+        if (warning.Length > 0)
+        {
+            TerrainMistilePlugin.TerrainMistileLogger.LogWarning(warning);
+        }
+    }
+
+    internal static void InvalidateFileMapping()
+    {
+        _fileMappingLoaded = false;
+    }
+
+    internal static bool TryBuildFileMappingForTests(
+        string directory,
+        out Dictionary<string, int> mapping,
+        out string error)
+    {
+        return TryBuildFileMapping(directory, out mapping, out _, out error);
+    }
+
+    private static bool TryBuildFileMapping(
+        string directory,
+        out Dictionary<string, int> nameToBiome,
+        out Dictionary<int, string> biomeToName,
+        out string error)
+    {
+        nameToBiome = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        biomeToName = new Dictionary<int, string>();
+        HashSet<string> exactBiomeNames = new(StringComparer.OrdinalIgnoreCase);
+        error = "";
+
+        foreach (KeyValuePair<string, int> biome in OriginalBiomes)
+        {
+            AddFileBiomeName(biome.Key, biome.Value, exactBiomeNames, nameToBiome, biomeToName);
+        }
+
         if (!Directory.Exists(directory))
         {
-            return;
+            return true;
         }
 
         string[] files;
         try
         {
-            files = Directory.GetFiles(directory, "expand_biomes*.yaml");
+            files = Directory.GetFiles(directory, "expand_biomes*.yaml", SearchOption.AllDirectories);
         }
-        catch
+        catch (Exception ex)
         {
-            return;
+            error = $"Failed to enumerate Expand World Data biome files: {ex.Message}";
+            return false;
         }
 
-        Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+        Array.Sort(files, (left, right) => StringComparer.OrdinalIgnoreCase.Compare(right, left));
         int nextBiomeBase = FirstCustomBiomeBase;
         foreach (string file in files)
         {
@@ -970,8 +1128,11 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
             {
                 entries = ExpandWorldDataBiomeDeserializer.Deserialize<List<ExpandWorldDataBiomeYaml>>(File.ReadAllText(file));
             }
-            catch
+            catch (Exception ex)
             {
+                string warning =
+                    $"Skipping invalid Expand World Data biome file '{file}': {ex.Message}";
+                error = error.Length == 0 ? warning : error + Environment.NewLine + warning;
                 continue;
             }
 
@@ -982,39 +1143,56 @@ internal static class TerrainMistileExpandWorldDataBiomeCompat
 
             foreach (ExpandWorldDataBiomeYaml entry in entries)
             {
-                string biomeName = entry.Biome.Trim();
-                if (biomeName.Length == 0 || FileNameToBiome.ContainsKey(biomeName))
+                string biomeName = entry?.Biome?.Trim() ?? "";
+                if (biomeName.Length == 0 || exactBiomeNames.Contains(biomeName))
                 {
                     continue;
                 }
 
-                nextBiomeBase = NextBiome(nextBiomeBase);
-                AddFileBiomeName(biomeName, nextBiomeBase);
+                if (!TryGetNextBiome(nextBiomeBase, out nextBiomeBase))
+                {
+                    error = $"Expand World Data biome limit was exceeded while assigning '{biomeName}'.";
+                    return false;
+                }
+
+                AddFileBiomeName(biomeName, nextBiomeBase, exactBiomeNames, nameToBiome, biomeToName);
             }
         }
+
+        return true;
     }
 
-    private static int NextBiome(int biome)
+    private static bool TryGetNextBiome(int biome, out int nextBiome)
     {
         uint value = unchecked((uint)biome);
-        return unchecked((int)(value switch
+        if (value == 0x80u)
         {
-            128u => 128u,
-            2147483648u => 128u,
-            _ => 2u * value
-        }));
-    }
-
-    private static void AddFileBiomeName(string name, int biome)
-    {
-        FileNameToBiome[name] = biome;
-        string normalized = NormalizeName(name);
-        if (!string.Equals(name, normalized, StringComparison.OrdinalIgnoreCase))
-        {
-            FileNameToBiome[normalized] = biome;
+            nextBiome = 0;
+            return false;
         }
 
-        FileBiomeToName[biome] = name;
+        uint nextValue = value == 0x80000000u ? 0x80u : 2u * value;
+        nextBiome = unchecked((int)nextValue);
+        return true;
+    }
+
+    private static void AddFileBiomeName(
+        string name,
+        int biome,
+        HashSet<string> exactBiomeNames,
+        Dictionary<string, int> nameToBiome,
+        Dictionary<int, string> biomeToName)
+    {
+        exactBiomeNames.Add(name);
+        nameToBiome[name] = biome;
+        string normalized = NormalizeName(name);
+        if (!string.Equals(name, normalized, StringComparison.OrdinalIgnoreCase) &&
+            !exactBiomeNames.Contains(normalized))
+        {
+            nameToBiome[normalized] = biome;
+        }
+
+        biomeToName[biome] = name;
     }
 
     private static string NormalizeName(string value)
@@ -1085,6 +1263,6 @@ internal readonly struct TerrainMistileBiomeSpawnRule
 
     public override string ToString()
     {
-        return $"interval={Interval:0.##}, playerSearchRadius={PlayerSearchRadius:0.##}, spawnChance={SpawnChance:0.###}, maxDeformationSpawnChanceBonus={MaxDeformationSpawnChanceBonus:0.###}, maxSpawn={MaxSpawn}, perPlayerSpawn={PerPlayerSpawn}, playerBaseValue={PlayerBaseValue}, baseCheckRadius={BaseCheckRadius:0.##}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
+        return $"interval={Interval:0.##}, playerSearchRadius={PlayerSearchRadius:0.##}, spawnChance={SpawnChance:0.###}, maxDeformationSpawnChanceBonus={MaxDeformationSpawnChanceBonus:0.###}, maxSpawn={MaxSpawn}, perPlayerSpawn={PerPlayerSpawn}, playerBaseValue={PlayerBaseValue}, baseCheckRadius={BaseCheckRadius:0.##}, spawnRadius={SpawnRadiusMin:0.##}~{SpawnRadiusMax:0.##}, spawnAltitude={SpawnAltitude:0.##}, resetRadius={ResetRadius:0.##}, health={Health:0.##}, visualColor=#{ColorUtility.ToHtmlStringRGB(VisualColor)}";
     }
 }

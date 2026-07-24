@@ -73,7 +73,7 @@ internal static class TerrainMistilePrefab
         Humanoid humanoid = prefab.GetComponent<Humanoid>();
         if (humanoid)
         {
-            humanoid.m_defaultItems = new GameObject[0];
+            humanoid.m_defaultItems = Array.Empty<GameObject>();
         }
 
         if (!prefab.GetComponent<TerrainMistileBehaviour>())

@@ -1,0 +1,6 @@
+<Project>
+    <PropertyGroup>
+        <!-- Copy this file to environment.props and adjust the path for local development. -->
+        <ValheimGamePath>C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimGamePath>
+    </PropertyGroup>
+</Project>
