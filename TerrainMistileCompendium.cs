@@ -26,21 +26,21 @@ internal static class TerrainMistileCompendium
         new(Heightmap.Biome.Ocean, "Ocean")
     };
 
-    private static void Postfix(TextsDialog __instance)
+    private static void Postfix(List<TextsDialog.TextInfo> ___m_texts)
     {
-        AddPage(__instance);
+        AddPage(___m_texts);
     }
 
-    private static void AddPage(TextsDialog dialog)
+    private static void AddPage(List<TextsDialog.TextInfo> texts)
     {
-        if (dialog == null || dialog.m_texts == null)
+        if (texts == null)
         {
             return;
         }
 
-        dialog.m_texts.RemoveAll(text => string.Equals(text?.m_topic, PageTopic, StringComparison.Ordinal));
-        dialog.m_texts.Add(new TextsDialog.TextInfo(PageTopic, BuildPageText()));
-        dialog.m_texts.Sort((left, right) => string.Compare(left?.m_topic, right?.m_topic, StringComparison.OrdinalIgnoreCase));
+        texts.RemoveAll(text => string.Equals(text?.m_topic, PageTopic, StringComparison.Ordinal));
+        texts.Add(new TextsDialog.TextInfo(PageTopic, BuildPageText()));
+        texts.Sort((left, right) => string.Compare(left?.m_topic, right?.m_topic, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string BuildPageText()

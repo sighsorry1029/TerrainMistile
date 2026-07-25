@@ -57,6 +57,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     public void Awake()
     {
+        TerrainCompAccess.Initialize();
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
 

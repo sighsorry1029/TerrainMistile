@@ -20,12 +20,23 @@
     <GamePath Condition="'$(GamePath)' == '' AND Exists('D:\SteamLibrary\steamapps\common\Valheim')">D:\SteamLibrary\steamapps\common\Valheim</GamePath>
     <BepInExPath Condition="'$(BepInExPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\BepInEx</BepInExPath>
     <CorlibPath Condition="'$(CorlibPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\valheim_Data\Managed</CorlibPath>
-    <PublicizedAssembliesPath Condition="'$(PublicizedAssembliesPath)' == '' AND '$(GamePath)' != ''">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TerrainMistile.csproj"
                       AdditionalProperties="PackageMod=false;DeployToGame=false" />
+    <Reference Include="assembly_valheim">
+      <HintPath>$(CorlibPath)\assembly_valheim.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="assembly_guiutils">
+      <HintPath>$(CorlibPath)\assembly_guiutils.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="assembly_utils">
+      <HintPath>$(CorlibPath)\assembly_utils.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(CorlibPath)\UnityEngine.CoreModule.dll</HintPath>
       <Private>true</Private>
@@ -34,6 +45,9 @@
   </ItemGroup>
 
   <Target Name="ValidateValheimTestReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(CorlibPath)\assembly_valheim.dll')" Text="assembly_valheim.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
+    <Error Condition="!Exists('$(CorlibPath)\assembly_guiutils.dll')" Text="assembly_guiutils.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
+    <Error Condition="!Exists('$(CorlibPath)\assembly_utils.dll')" Text="assembly_utils.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
     <Error Condition="!Exists('$(CorlibPath)\UnityEngine.CoreModule.dll')" Text="UnityEngine.CoreModule.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
     <Error Condition="!Exists('$(CorlibPath)\netstandard.dll')" Text="Valheim's netstandard.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
   </Target>

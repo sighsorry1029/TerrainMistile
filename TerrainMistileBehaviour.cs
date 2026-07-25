@@ -101,7 +101,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
         }
 
         _character.m_name = TerrainMistilePlugin.DisplayName;
-        _character.m_faction = Character.Faction.Dverger;
+        _character.m_faction = Character.Faction.Boss;
         _character.m_aiSkipTarget = true;
         _character.m_flying = true;
     }
@@ -175,18 +175,12 @@ public class TerrainMistileBehaviour : MonoBehaviour
             _monsterAI.m_enableHuntPlayer = false;
             _monsterAI.m_attackPlayerObjects = false;
             _monsterAI.m_aggravatable = false;
-            _monsterAI.m_targetCreature = null;
-            _monsterAI.m_targetStatic = null;
-            if (_monsterAI.m_nview && _monsterAI.m_nview.IsValid())
+            ZNetView nview = _monsterAI.GetComponent<ZNetView>();
+            if (nview && nview.IsValid())
             {
                 _monsterAI.SetHuntPlayer(false);
-                _monsterAI.SetAlerted(false);
             }
-            else
-            {
-                _monsterAI.m_huntPlayer = false;
-                _monsterAI.m_alerted = false;
-            }
+
             _monsterAI.enabled = false;
         }
     }

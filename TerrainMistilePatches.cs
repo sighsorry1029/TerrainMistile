@@ -6,7 +6,7 @@ namespace TerrainMistile;
 
 [HarmonyPatch(
     typeof(ZoneSystem),
-    nameof(ZoneSystem.SpawnLocation),
+    "SpawnLocation",
     typeof(ZoneSystem.ZoneLocation),
     typeof(int),
     typeof(Vector3),

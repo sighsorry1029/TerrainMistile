@@ -55,7 +55,7 @@ internal static class TerrainMistilePrefab
         if (character)
         {
             character.m_name = TerrainMistilePlugin.DisplayName;
-            character.m_faction = Character.Faction.Dverger;
+            character.m_faction = Character.Faction.Boss;
             character.m_aiSkipTarget = true;
         }
 

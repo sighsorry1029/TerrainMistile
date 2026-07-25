@@ -59,7 +59,6 @@
                 <BepInExPath Condition="!Exists('$(BepInExPath)')AND Exists('$(GamePath)')">$(GamePath)\BepInEx</BepInExPath>
                 <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed</CorlibPath>
                 <CorlibPath Condition="!Exists('$(CorlibPath)') AND Exists('$(GamePath)')">$(GamePath)\unstripped_corlib</CorlibPath>
-                <PublicizedAssembliesPath Condition="!Exists('$(PublicizedAssembliesPath)') AND Exists('$(GamePath)')">$(GamePath)\valheim_Data\Managed\publicized_assemblies</PublicizedAssembliesPath>
             </PropertyGroup>
         </When>
     </Choose>
@@ -71,13 +70,13 @@
             <HintPath>$(BepInExPath)\core\0Harmony.dll</HintPath>
         </Reference>
         <Reference Include="assembly_guiutils">
-            <HintPath>$(PublicizedAssembliesPath)\assembly_guiutils_publicized.dll</HintPath>
+            <HintPath>$(CorlibPath)\assembly_guiutils.dll</HintPath>
         </Reference>
         <Reference Include="assembly_utils">
-            <HintPath>$(PublicizedAssembliesPath)\assembly_utils_publicized.dll</HintPath>
+            <HintPath>$(CorlibPath)\assembly_utils.dll</HintPath>
         </Reference>
         <Reference Include="assembly_valheim">
-            <HintPath>$(PublicizedAssembliesPath)\assembly_valheim_publicized.dll</HintPath>
+            <HintPath>$(CorlibPath)\assembly_valheim.dll</HintPath>
         </Reference>
         <Reference Include="BepInEx">
             <HintPath>$(BepInExPath)\core\BepInEx.dll</HintPath>
@@ -126,6 +125,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Plugin.cs"/>
+        <Compile Include="TerrainCompAccess.cs"/>
         <Compile Include="TerrainMistileBehaviour.cs"/>
         <Compile Include="TerrainMistileCompendium.cs"/>
         <Compile Include="TerrainMistileCompat.cs"/>
@@ -159,6 +159,29 @@
         <PackageReference Include="YamlDotNet" Version="16.3.0" GeneratePathProperty="true" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+    <Target Name="ValidateRuntimeGameAssemblyReferences" AfterTargets="ResolveAssemblyReferences">
+        <PropertyGroup>
+            <_ExpectedAssemblyValheimPath>$([MSBuild]::NormalizePath('$(CorlibPath)', 'assembly_valheim.dll'))</_ExpectedAssemblyValheimPath>
+            <_ExpectedAssemblyGuiutilsPath>$([MSBuild]::NormalizePath('$(CorlibPath)', 'assembly_guiutils.dll'))</_ExpectedAssemblyGuiutilsPath>
+            <_ExpectedAssemblyUtilsPath>$([MSBuild]::NormalizePath('$(CorlibPath)', 'assembly_utils.dll'))</_ExpectedAssemblyUtilsPath>
+        </PropertyGroup>
+        <ItemGroup>
+            <_ResolvedAssemblyValheim Include="@(ReferencePath)"
+                                      Condition="'%(ReferencePath.Filename)%(ReferencePath.Extension)' == 'assembly_valheim.dll'"/>
+            <_ResolvedAssemblyGuiutils Include="@(ReferencePath)"
+                                      Condition="'%(ReferencePath.Filename)%(ReferencePath.Extension)' == 'assembly_guiutils.dll'"/>
+            <_ResolvedAssemblyUtils Include="@(ReferencePath)"
+                                   Condition="'%(ReferencePath.Filename)%(ReferencePath.Extension)' == 'assembly_utils.dll'"/>
+        </ItemGroup>
+        <Error Condition="'$(AllowUnsafeBlocks)' == 'true'"
+               Text="TerrainMistile must not use AllowUnsafeBlocks to bypass game-member visibility."/>
+        <Error Condition="'@(_ResolvedAssemblyValheim->'%(FullPath)')' != '$(_ExpectedAssemblyValheimPath)'"
+               Text="TerrainMistile must compile against the runtime assembly_valheim.dll at '$(_ExpectedAssemblyValheimPath)'."/>
+        <Error Condition="'@(_ResolvedAssemblyGuiutils->'%(FullPath)')' != '$(_ExpectedAssemblyGuiutilsPath)'"
+               Text="TerrainMistile must compile against the runtime assembly_guiutils.dll at '$(_ExpectedAssemblyGuiutilsPath)'."/>
+        <Error Condition="'@(_ResolvedAssemblyUtils->'%(FullPath)')' != '$(_ExpectedAssemblyUtilsPath)'"
+               Text="TerrainMistile must compile against the runtime assembly_utils.dll at '$(_ExpectedAssemblyUtilsPath)'."/>
+    </Target>
     <Target Name="ValidateRequestedBuildActions" BeforeTargets="Build" Condition="'$(DeployToGame)' == 'true' OR '$(PackageMod)' == 'true'">
         <Error Text="PackageMod requires Release|AnyCPU." Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' != 'Release|AnyCPU'"/>
         <Error Text="PackageMod currently requires Windows because UpdateManifest.ps1 is run with powershell.exe." Condition="'$(PackageMod)' == 'true' AND '$(OS)' != 'Windows_NT'"/>

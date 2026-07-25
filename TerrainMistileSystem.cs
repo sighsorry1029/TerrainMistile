@@ -48,6 +48,7 @@ internal static class TerrainMistileSystem
     private static readonly List<Player> TempPlayers = new();
     private static readonly List<Player> TempNearbyPlayers = new();
     private static readonly List<Heightmap> TempHeightmaps = new();
+    private static readonly List<Piece> TempPieces = new();
     private static readonly List<ZDO> TempPlayerBaseZoneObjects = new();
 
     // Reservations and protected areas prevent repeated TerrainMistiles from wasting rolls on the same reset target.
@@ -158,7 +159,7 @@ internal static class TerrainMistileSystem
         }
 
         _nextProtectedTerrainAreaRequestTime = Time.time + ProtectedTerrainAreaRequestRetryInterval;
-        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.instance.GetServerPeerID(), RequestProtectedTerrainAreasRpcName, new ZPackage());
+        ZRoutedRpc.instance.InvokeRoutedRPC(RequestProtectedTerrainAreasRpcName, new ZPackage());
     }
 
     internal static bool ResetTerrainAround(Vector3 center, float radius, bool resetPaint)
@@ -186,14 +187,22 @@ internal static class TerrainMistileSystem
                 }
 
                 TerrainComp terrainComp = TerrainComp.FindTerrainCompiler(((Component)hmap).transform.position);
-                if (!terrainComp || !terrainComp.m_initialized)
+                if (!terrainComp ||
+                    !TerrainCompAccess.TryCaptureResetData(
+                        terrainComp,
+                        resetPaint,
+                        out TerrainCompAccess.ResetData terrainData))
                 {
                     continue;
                 }
 
                 if (!terrainComp.IsOwner())
                 {
-                    terrainComp.m_nview?.ClaimOwnership();
+                    ZNetView zNetView = terrainComp.GetComponent<ZNetView>();
+                    if (zNetView)
+                    {
+                        zNetView.ClaimOwnership();
+                    }
                 }
 
                 if (!terrainComp.IsOwner())
@@ -201,17 +210,14 @@ internal static class TerrainMistileSystem
                     continue;
                 }
 
-                int changedOnHeightmap = ClearTerrainCompRadius(terrainComp, hmap, center, radius, resetPaint);
+                int changedOnHeightmap = ClearTerrainCompRadius(terrainData, hmap, center, radius, resetPaint);
                 if (changedOnHeightmap <= 0)
                 {
                     continue;
                 }
 
                 changedCells += changedOnHeightmap;
-                terrainComp.m_operations++;
-                terrainComp.m_lastOpPoint = center;
-                terrainComp.m_lastOpRadius = radius;
-                terrainComp.Save();
+                TerrainCompAccess.CommitReset(terrainComp, center, radius);
                 hmap.Poke(delayed: false);
             }
 
@@ -235,9 +241,15 @@ internal static class TerrainMistileSystem
         }
     }
 
-    private static int ClearTerrainCompRadius(TerrainComp terrainComp, Heightmap hmap, Vector3 center, float radius, bool resetPaint)
+    private static int ClearTerrainCompRadius(
+        in TerrainCompAccess.ResetData terrainData,
+        Heightmap hmap,
+        Vector3 center,
+        float radius,
+        bool resetPaint)
     {
-        int width = terrainComp.m_width + 1;
+        TerrainCompAccess.ScanData scanData = terrainData.Scan;
+        int width = scanData.VertexWidth;
         float radiusSqr = radius * radius;
         int changed = 0;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
@@ -262,24 +274,21 @@ internal static class TerrainMistileSystem
 
                 bool cellChanged = false;
 
-                if (index < terrainComp.m_modifiedHeight.Length &&
-                    index < terrainComp.m_levelDelta.Length &&
-                    index < terrainComp.m_smoothDelta.Length &&
-                    (terrainComp.m_modifiedHeight[index] || terrainComp.m_levelDelta[index] != 0f || terrainComp.m_smoothDelta[index] != 0f))
+                if (scanData.ModifiedHeight[index] ||
+                    scanData.LevelDelta[index] != 0f ||
+                    scanData.SmoothDelta[index] != 0f)
                 {
-                    terrainComp.m_modifiedHeight[index] = false;
-                    terrainComp.m_levelDelta[index] = 0f;
-                    terrainComp.m_smoothDelta[index] = 0f;
+                    scanData.ModifiedHeight[index] = false;
+                    scanData.LevelDelta[index] = 0f;
+                    scanData.SmoothDelta[index] = 0f;
                     cellChanged = true;
                 }
 
                 if (resetPaint &&
-                    index < terrainComp.m_modifiedPaint.Length &&
-                    index < terrainComp.m_paintMask.Length &&
-                    terrainComp.m_modifiedPaint[index])
+                    terrainData.ModifiedPaint[index])
                 {
-                    terrainComp.m_modifiedPaint[index] = false;
-                    terrainComp.m_paintMask[index] = Color.black;
+                    terrainData.ModifiedPaint[index] = false;
+                    terrainData.PaintMask[index] = Color.black;
                     cellChanged = true;
                 }
 
@@ -315,6 +324,7 @@ internal static class TerrainMistileSystem
         TempPlayers.Clear();
         TempNearbyPlayers.Clear();
         TempHeightmaps.Clear();
+        TempPieces.Clear();
         TempPlayerBaseZoneObjects.Clear();
         TempPlayerBasePrefabNames.Clear();
         TargetReservations.Clear();
@@ -468,37 +478,41 @@ internal static class TerrainMistileSystem
             return;
         }
 
-        foreach (TerrainComp terrainComp in TerrainComp.s_instances)
+        foreach (TerrainComp terrainComp in TerrainCompAccess.Instances)
         {
-            if (!terrainComp || !terrainComp.m_initialized || !terrainComp.IsOwner() || !terrainComp.m_hmap)
+            if (!terrainComp ||
+                !terrainComp.IsOwner() ||
+                !TerrainCompAccess.TryCaptureScanData(terrainComp, out TerrainCompAccess.ScanData terrainData))
             {
                 continue;
             }
 
-            if (!IsTerrainCompNearAnyPlayer(terrainComp, maxPlayerSearchRadius))
+            if (!IsTerrainCompNearAnyPlayer(terrainData.Heightmap, maxPlayerSearchRadius))
             {
                 continue;
             }
 
-            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp, terrainData);
             if (cellCache.ModifiedCellIndices.Count == 0)
             {
                 continue;
             }
 
-            CollectModifiedTerrainUnits(terrainComp, cellCache);
+            CollectModifiedTerrainUnits(terrainData, cellCache);
         }
     }
 
-    private static void CollectModifiedTerrainUnits(TerrainComp terrainComp, ModifiedTerrainCellCache cellCache)
+    private static void CollectModifiedTerrainUnits(
+        in TerrainCompAccess.ScanData terrainData,
+        ModifiedTerrainCellCache cellCache)
     {
-        int width = terrainComp.m_width + 1;
-        Heightmap hmap = terrainComp.m_hmap;
+        int width = terrainData.VertexWidth;
+        Heightmap hmap = terrainData.Heightmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
 
         foreach (int index in cellCache.ModifiedCellIndices)
         {
-            if (!IsModifiedHeightCell(terrainComp, index))
+            if (!IsModifiedHeightCell(terrainData, index))
             {
                 continue;
             }
@@ -526,7 +540,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
+            float deformationPressure = GetHeightDeformationPressure(terrainData, index);
             Vector3 unitCenter = GetSpawnUnitCenter(key);
             float score = GetTargetSpreadScore(candidate, unitCenter, deformationPressure);
             if (ModifiedTerrainUnits.TryGetValue(key, out ModifiedTerrainUnitCandidate unit))
@@ -559,25 +573,34 @@ internal static class TerrainMistileSystem
         float bestScore = float.MinValue;
         Vector3 bestPoint = default;
 
-        foreach (TerrainComp terrainComp in TerrainComp.s_instances)
+        foreach (TerrainComp terrainComp in TerrainCompAccess.Instances)
         {
-            if (!terrainComp || !terrainComp.m_initialized || !terrainComp.IsOwner() || !terrainComp.m_hmap)
+            if (!terrainComp ||
+                !terrainComp.IsOwner() ||
+                !TerrainCompAccess.TryCaptureScanData(terrainComp, out TerrainCompAccess.ScanData terrainData))
             {
                 continue;
             }
 
-            if (!IsTerrainCompNearPoint(terrainComp, center, range))
+            if (!IsTerrainCompNearPoint(terrainData.Heightmap, center, range))
             {
                 continue;
             }
 
-            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp, terrainData);
             if (cellCache.ModifiedCellIndices.Count == 0)
             {
                 continue;
             }
 
-            TryFindBestModifiedCellNear(terrainComp, cellCache, center, rangeSqr, ref found, ref bestScore, ref bestPoint);
+            TryFindBestModifiedCellNear(
+                terrainData,
+                cellCache,
+                center,
+                rangeSqr,
+                ref found,
+                ref bestScore,
+                ref bestPoint);
         }
 
         modifiedPoint = bestPoint;
@@ -585,7 +608,7 @@ internal static class TerrainMistileSystem
     }
 
     private static void TryFindBestModifiedCellNear(
-        TerrainComp terrainComp,
+        in TerrainCompAccess.ScanData terrainData,
         ModifiedTerrainCellCache cellCache,
         Vector3 center,
         float rangeSqr,
@@ -593,12 +616,12 @@ internal static class TerrainMistileSystem
         ref float bestScore,
         ref Vector3 bestPoint)
     {
-        int width = terrainComp.m_width + 1;
-        Heightmap hmap = terrainComp.m_hmap;
+        int width = terrainData.VertexWidth;
+        Heightmap hmap = terrainData.Heightmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
         foreach (int index in cellCache.ModifiedCellIndices)
         {
-            if (!IsModifiedHeightCell(terrainComp, index))
+            if (!IsModifiedHeightCell(terrainData, index))
             {
                 continue;
             }
@@ -623,7 +646,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            float deformationPressure = GetHeightDeformationPressure(terrainComp, index);
+            float deformationPressure = GetHeightDeformationPressure(terrainData, index);
             float score = GetTargetSpreadScore(candidate, center, deformationPressure);
             if (!found || score > bestScore)
             {
@@ -635,25 +658,26 @@ internal static class TerrainMistileSystem
 
     }
 
-    private static bool IsModifiedHeightCell(TerrainComp terrainComp, int index)
+    private static bool IsModifiedHeightCell(in TerrainCompAccess.ScanData terrainData, int index)
     {
         return index >= 0 &&
-               ((index < terrainComp.m_modifiedHeight.Length && terrainComp.m_modifiedHeight[index]) ||
-                (index < terrainComp.m_levelDelta.Length && terrainComp.m_levelDelta[index] != 0f) ||
-                (index < terrainComp.m_smoothDelta.Length && terrainComp.m_smoothDelta[index] != 0f));
+               index < terrainData.ModifiedHeight.Length &&
+               (terrainData.ModifiedHeight[index] ||
+                terrainData.LevelDelta[index] != 0f ||
+                terrainData.SmoothDelta[index] != 0f);
     }
 
-    private static float GetHeightDeformationPressure(TerrainComp terrainComp, int index)
+    private static float GetHeightDeformationPressure(in TerrainCompAccess.ScanData terrainData, int index)
     {
         float delta = 0f;
-        if (index < terrainComp.m_levelDelta.Length)
+        if (index < terrainData.LevelDelta.Length)
         {
-            delta += terrainComp.m_levelDelta[index];
+            delta += terrainData.LevelDelta[index];
         }
 
-        if (index < terrainComp.m_smoothDelta.Length)
+        if (index < terrainData.SmoothDelta.Length)
         {
-            delta += terrainComp.m_smoothDelta[index];
+            delta += terrainData.SmoothDelta[index];
         }
 
         return Mathf.Clamp01(Mathf.Abs(delta) / TerrainHeightDeformationCap);
@@ -849,7 +873,9 @@ internal static class TerrainMistileSystem
         }
 
         PlayerBasePiecesByBucket.Clear();
-        foreach (Piece piece in Piece.s_allPieces)
+        TempPieces.Clear();
+        Piece.GetAllPiecesInRadius(Vector3.zero, float.MaxValue, TempPieces);
+        foreach (Piece piece in TempPieces)
         {
             if (!piece)
             {
@@ -878,6 +904,7 @@ internal static class TerrainMistileSystem
 
             pieces.Add(new PlayerBasePiece(prefabName, position));
         }
+        TempPieces.Clear();
 
         _playerBasePieceBucketsBuilt = true;
         _nextPlayerBasePieceBucketRefreshTime = Time.time + PlayerBasePieceBucketRefreshInterval;
@@ -897,7 +924,9 @@ internal static class TerrainMistileSystem
             Mathf.FloorToInt(point.z / PlayerBasePieceBucketSize));
     }
 
-    private static ModifiedTerrainCellCache GetModifiedTerrainCellCache(TerrainComp terrainComp)
+    private static ModifiedTerrainCellCache GetModifiedTerrainCellCache(
+        TerrainComp terrainComp,
+        in TerrainCompAccess.ScanData terrainData)
     {
         if (!ModifiedTerrainCellsByComp.TryGetValue(terrainComp, out ModifiedTerrainCellCache cache))
         {
@@ -905,23 +934,23 @@ internal static class TerrainMistileSystem
             ModifiedTerrainCellsByComp[terrainComp] = cache;
         }
 
-        int width = terrainComp.m_width + 1;
+        int width = terrainData.VertexWidth;
         if (cache.Width != width ||
-            cache.Operations != terrainComp.m_operations ||
+            cache.Operations != terrainData.Operations ||
             Time.time >= cache.NextRefreshTime)
         {
             cache.ModifiedCellIndices.Clear();
             int cellCount = width * width;
             for (int index = 0; index < cellCount; index++)
             {
-                if (IsModifiedHeightCell(terrainComp, index))
+                if (IsModifiedHeightCell(terrainData, index))
                 {
                     cache.ModifiedCellIndices.Add(index);
                 }
             }
 
             cache.Width = width;
-            cache.Operations = terrainComp.m_operations;
+            cache.Operations = terrainData.Operations;
             cache.NextRefreshTime = Time.time + ModifiedTerrainCellCacheRefreshInterval;
         }
 
@@ -1032,7 +1061,8 @@ internal static class TerrainMistileSystem
             return;
         }
 
-        if (ZRoutedRpc.instance == null || sender != ZRoutedRpc.instance.GetServerPeerID())
+        ZNetPeer? serverPeer = ZNet.instance?.GetServerPeer();
+        if (serverPeer == null || sender != serverPeer.m_uid)
         {
             return;
         }
@@ -1287,25 +1317,26 @@ internal static class TerrainMistileSystem
 
         CleanupExternalTerrainIgnoreAreas();
         float radiusSqr = radius * radius;
-        foreach (TerrainComp terrainComp in TerrainComp.s_instances)
+        foreach (TerrainComp terrainComp in TerrainCompAccess.Instances)
         {
-            if (!terrainComp || !terrainComp.m_initialized || !terrainComp.m_hmap)
+            if (!terrainComp ||
+                !TerrainCompAccess.TryCaptureScanData(terrainComp, out TerrainCompAccess.ScanData terrainData))
             {
                 continue;
             }
 
-            if (!IsTerrainCompNearPoint(terrainComp, center, radius))
+            if (!IsTerrainCompNearPoint(terrainData.Heightmap, center, radius))
             {
                 continue;
             }
 
-            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp);
+            ModifiedTerrainCellCache cellCache = GetModifiedTerrainCellCache(terrainComp, terrainData);
             if (cellCache.ModifiedCellIndices.Count == 0)
             {
                 continue;
             }
 
-            if (HasModifiedCellInRadius(terrainComp, cellCache, center, radiusSqr))
+            if (HasModifiedCellInRadius(terrainData, cellCache, center, radiusSqr))
             {
                 return true;
             }
@@ -1714,18 +1745,18 @@ internal static class TerrainMistileSystem
     }
 
     private static bool HasModifiedCellInRadius(
-        TerrainComp terrainComp,
+        in TerrainCompAccess.ScanData terrainData,
         ModifiedTerrainCellCache cellCache,
         Vector3 center,
         float radiusSqr)
     {
-        int width = terrainComp.m_width + 1;
-        Heightmap hmap = terrainComp.m_hmap;
+        int width = terrainData.VertexWidth;
+        Heightmap hmap = terrainData.Heightmap;
         Vector3 hmapPosition = ((Component)hmap).transform.position;
 
         foreach (int index in cellCache.ModifiedCellIndices)
         {
-            if (!IsModifiedHeightCell(terrainComp, index))
+            if (!IsModifiedHeightCell(terrainData, index))
             {
                 continue;
             }
@@ -1814,17 +1845,12 @@ internal static class TerrainMistileSystem
         }
     }
 
-    private static bool IsTerrainCompNearPoint(TerrainComp terrainComp, Vector3 point, float range)
+    private static bool IsTerrainCompNearPoint(Heightmap heightmap, Vector3 point, float range)
     {
-        float halfSizeWithRange = terrainComp.m_size / 2f + range;
-        Vector3 terrainCompPosition = ((Component)terrainComp).transform.position;
-        return point.x >= terrainCompPosition.x - halfSizeWithRange &&
-               point.x <= terrainCompPosition.x + halfSizeWithRange &&
-               point.z >= terrainCompPosition.z - halfSizeWithRange &&
-               point.z <= terrainCompPosition.z + halfSizeWithRange;
+        return heightmap.IsPointInside(point, range);
     }
 
-    private static bool IsTerrainCompNearAnyPlayer(TerrainComp terrainComp, float range)
+    private static bool IsTerrainCompNearAnyPlayer(Heightmap heightmap, float range)
     {
         foreach (Player player in TempPlayers)
         {
@@ -1833,7 +1859,7 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            if (IsTerrainCompNearPoint(terrainComp, ((Component)player).transform.position, range))
+            if (IsTerrainCompNearPoint(heightmap, ((Component)player).transform.position, range))
             {
                 return true;
             }

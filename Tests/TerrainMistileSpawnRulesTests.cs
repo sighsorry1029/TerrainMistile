@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace TerrainMistile.Tests;
@@ -10,6 +11,33 @@ namespace TerrainMistile.Tests;
 public sealed class TerrainMistileSpawnRulesTests
 {
     private const float Tolerance = 0.0001f;
+
+    [TestMethod]
+    public void BuildUsesRuntimeGameAssemblies()
+    {
+        foreach (string assemblyName in new[] { "assembly_valheim", "assembly_guiutils", "assembly_utils" })
+        {
+            Assembly assembly = Assembly.Load(assemblyName);
+            Assert.AreEqual(
+                assemblyName + ".dll",
+                Path.GetFileName(assembly.Location),
+                ignoreCase: true,
+                $"Expected the runtime {assemblyName} assembly.");
+        }
+    }
+
+    [TestMethod]
+    public void BuildDoesNotEnableAssemblyWideVerificationBypass()
+    {
+        foreach (CustomAttributeData attribute in
+                 CustomAttributeData.GetCustomAttributes(typeof(TerrainMistilePlugin).Module))
+        {
+            Assert.AreNotEqual(
+                "System.Security.UnverifiableCodeAttribute",
+                attribute.AttributeType.FullName,
+                "The runtime accessor boundary must not depend on assembly-wide verification bypass.");
+        }
+    }
 
     [TestMethod]
     public void EmptyYamlUsesBuiltInDefaults()
