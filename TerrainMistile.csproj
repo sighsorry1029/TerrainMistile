@@ -130,6 +130,7 @@
         <Compile Include="TerrainMistileCompendium.cs"/>
         <Compile Include="TerrainMistileCompat.cs"/>
         <Compile Include="TerrainMistileExternalTerrainCompat.cs"/>
+        <Compile Include="TerrainMistileLocalization.cs"/>
         <Compile Include="TerrainMistilePatches.cs"/>
         <Compile Include="TerrainMistilePrefab.cs"/>
         <Compile Include="TerrainMistileSpawnRules.cs"/>
@@ -149,7 +150,12 @@
         <Content Include="Thunderstore\CHANGELOG.md"/>
         <Content Include="Thunderstore\icon.png"/>
         <Content Include="Thunderstore\manifest.json"/>
+        <EmbeddedResource Include="Translations\TerrainMistile.English.yml"/>
+        <EmbeddedResource Include="Translations\TerrainMistile.Korean.yml"/>
         <Content Include="UpdateManifest.ps1"/>
+    </ItemGroup>
+    <ItemGroup>
+        <TerrainMistileTranslation Include="$(ProjectDir)Translations\$(AssemblyName).English.yml"/>
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.44.1">
@@ -217,14 +223,19 @@
     </Target>
     <Target Name="DeployToGame" AfterTargets="GetAssemblyVersion" Condition="'$(DeployToGame)' == 'true'">
         <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
+        <Error Text="English localization YML not found." Condition="!Exists('$(ProjectDir)Translations\$(AssemblyName).English.yml')"/>
         <Error Text="CopyOutputDLLPath is not configured. Set it in environment.props or pass it as an MSBuild property." Condition="'$(CopyOutputDLLPath)' == ''"/>
         <Error Text="CopyOutputDLLPath does not exist: $(CopyOutputDLLPath)" Condition="!Exists('$(CopyOutputDLLPath)')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true"/>
+        <Copy SourceFiles="@(TerrainMistileTranslation)" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')"/>
+        <Copy SourceFiles="@(TerrainMistileTranslation)" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
+        <Copy SourceFiles="@(TerrainMistileTranslation)" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
     </Target>
     <Target Name="PrepareThunderstorePackage" AfterTargets="GetAssemblyVersion" Condition="'$(PackageMod)' == 'true' AND '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
         <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
+        <Error Text="English localization YML not found." Condition="!Exists('$(ProjectDir)Translations\$(AssemblyName).English.yml')"/>
         <Error Text="README.md not found in project directory." Condition="!Exists('README.md')"/>
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\manifest.json')"/>
         <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\CHANGELOG.md')"/>
@@ -238,6 +249,7 @@
             <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\CHANGELOG.md"/>
             <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\manifest.json"/>
             <ThunderstorePackageFiles Include="$(ProjectDir)Thunderstore\icon.png"/>
+            <ThunderstorePackageFiles Include="@(TerrainMistileTranslation)"/>
         </ItemGroup>
         <Copy SourceFiles="@(ThunderstorePackageFiles)" DestinationFolder="$(PackageDir)" OverwriteReadOnlyFiles="true"/>
     </Target>
@@ -250,6 +262,7 @@
         <RemoveDir Directories="$(NexusPackageDir)" Condition="Exists('$(NexusPackageDir)')"/>
         <MakeDir Directories="$(NexusPackageDir)"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(NexusPackageDir)"/>
+        <Copy SourceFiles="@(TerrainMistileTranslation)" DestinationFolder="$(NexusPackageDir)" OverwriteReadOnlyFiles="true"/>
         <ZipDirectory SourceDirectory="$(NexusPackageDir)" DestinationFile="Nexus\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(NexusPackageDir)"/>
     </Target>

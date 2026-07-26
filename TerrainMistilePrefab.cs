@@ -54,7 +54,7 @@ internal static class TerrainMistilePrefab
         Character character = prefab.GetComponent<Character>();
         if (character)
         {
-            character.m_name = TerrainMistilePlugin.DisplayName;
+            character.m_name = TerrainMistilePlugin.DisplayNameToken;
             character.m_faction = Character.Faction.Boss;
             character.m_aiSkipTarget = true;
         }

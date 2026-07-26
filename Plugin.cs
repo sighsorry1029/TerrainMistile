@@ -15,9 +15,11 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.6";
+    internal const string ModVersion = "1.0.7";
     internal const string Author = "sighsorry";
-    internal const string DefaultDisplayName = "Earth Warden";
+    internal const string DisplayNameToken = "$terrainmistile_creature_name";
+    internal const string CompendiumTopicToken = "$terrainmistile_compendium_topic";
+    internal const string CheckCompendiumMessageToken = "$terrainmistile_message_check_compendium";
     private const string ModGUID = $"{Author}.{ModName}";
     private const string ConfigFileName = $"{ModGUID}.cfg";
     private const string SpawnRulesFileName = $"{ModName}.yml";
@@ -32,14 +34,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         MinimumRequiredVersion = ModVersion,
         ModRequired = true
     };
-    internal static string DisplayName
-    {
-        get
-        {
-            string value = (_displayName?.Value ?? "").Trim();
-            return value.Length == 0 ? DefaultDisplayName : value;
-        }
-    }
+    internal static bool SpawningEnabled => _terrainMistileEnabled?.Value != Toggle.Off;
     private FileSystemWatcher _watcher = null!;
     private FileSystemWatcher _spawnRulesWatcher = null!;
     private readonly object _reloadLock = new();
@@ -57,13 +52,19 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     public void Awake()
     {
+        TerrainMistileLocalization.Load(TerrainMistileLogger);
         TerrainCompAccess.Initialize();
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
 
+        _terrainMistileEnabled = config(
+            "1 - General",
+            "Enable TerrainMistile",
+            Toggle.On,
+            "Globally enables new TerrainMistile spawns. Existing TerrainMistiles are not removed when disabled.");
         _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
-        _displayName = config("2 - Display", "Display Name", DefaultDisplayName, "In-game name shown to players for TerrainMistile.");
+        RemoveObsoleteDisplayNameConfig();
 
         TerrainMistileSpawnRules.Initialize(TerrainMistileLogger);
         TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
@@ -288,9 +289,16 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     #region ConfigOptions
 
+    private static ConfigEntry<Toggle> _terrainMistileEnabled = null!;
     private static ConfigEntry<Toggle> _serverConfigLocked = null!;
-    private static ConfigEntry<string> _displayName = null!;
     private static CustomSyncedValue<string> SpawnRulesYaml = null!;
+
+    private void RemoveObsoleteDisplayNameConfig()
+    {
+        ConfigDefinition definition = new("2 - Display", "Display Name");
+        Config.Bind(definition, string.Empty);
+        Config.Remove(definition);
+    }
 
     private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
     {

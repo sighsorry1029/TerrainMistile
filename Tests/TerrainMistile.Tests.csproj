@@ -42,6 +42,9 @@
       <Private>true</Private>
     </Reference>
     <None Include="$(CorlibPath)\netstandard.dll" Link="netstandard.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Translations\TerrainMistile.*.yml"
+          Link="Translations\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="ValidateValheimTestReferences" BeforeTargets="ResolveReferences">

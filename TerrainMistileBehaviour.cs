@@ -100,7 +100,7 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        _character.m_name = TerrainMistilePlugin.DisplayName;
+        _character.m_name = TerrainMistilePlugin.DisplayNameToken;
         _character.m_faction = Character.Faction.Boss;
         _character.m_aiSkipTarget = true;
         _character.m_flying = true;

@@ -11,7 +11,15 @@ namespace TerrainMistile;
 [HarmonyPatch(typeof(TextsDialog), "UpdateTextsList")]
 internal static class TerrainMistileCompendium
 {
-    private const string PageTopic = "TerrainMistile";
+    private const string PageTopic = TerrainMistilePlugin.CompendiumTopicToken;
+    private const string ExplanationToken = "$terrainmistile_compendium_explanation";
+    private const string ProtectionHeadingToken = "$terrainmistile_compendium_protection_heading";
+    private const string RequirementToken = "$terrainmistile_compendium_requirement";
+    private const string MistileDisabledToken = "$terrainmistile_compendium_mistile_disabled";
+    private const string ProtectionDisabledToken = "$terrainmistile_compendium_protection_disabled";
+    private const string OtherBiomesToken = "$terrainmistile_compendium_other_biomes";
+    private const string PiecesHeadingToken = "$terrainmistile_compendium_pieces_heading";
+    private const string NoPiecesToken = "$terrainmistile_compendium_no_pieces";
 
     private static readonly VanillaBiomeEntry[] VanillaBiomes =
     {
@@ -38,23 +46,38 @@ internal static class TerrainMistileCompendium
             return;
         }
 
-        texts.RemoveAll(text => string.Equals(text?.m_topic, PageTopic, StringComparison.Ordinal));
-        texts.Add(new TextsDialog.TextInfo(PageTopic, BuildPageText()));
+        string localizedTopic = LocalizeOrFallback(PageTopic, TerrainMistilePlugin.ModName);
+        texts.RemoveAll(text =>
+            string.Equals(text?.m_topic, PageTopic, StringComparison.Ordinal) ||
+            string.Equals(text?.m_topic, localizedTopic, StringComparison.Ordinal));
+        texts.Add(new TextsDialog.TextInfo(localizedTopic, BuildPageText(localizedTopic)));
         texts.Sort((left, right) => string.Compare(left?.m_topic, right?.m_topic, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string BuildPageText()
+    private static string BuildPageText(string localizedTopic)
     {
         StringBuilder builder = new(4096);
-        AppendBiomeRules(builder);
+        builder.Append(LocalizeOrFallback(
+            ExplanationToken,
+            "Protection counts different recognized settlement facility types around each altered terrain point. " +
+            "Multiple copies of the same facility count as one type. " +
+            $"{localizedTopic} spawning is blocked on protected terrain.",
+            localizedTopic));
+        builder.Append("\n\n");
+        AppendBiomeRules(builder, localizedTopic);
         builder.Append("\n\n");
         AppendPlayerBasePrefabs(builder);
         return builder.ToString().TrimEnd();
     }
 
-    private static void AppendBiomeRules(StringBuilder builder)
+    private static void AppendBiomeRules(StringBuilder builder, string localizedTopic)
     {
-        builder.Append("<color=#FFD27A><b>Player Base Protection by Biome</b></color>\n\n");
+        builder
+            .Append("<color=#FFD27A><b>")
+            .Append(LocalizeOrFallback(
+                ProtectionHeadingToken,
+                "Settlement Protection by Biome"))
+            .Append("</b></color>\n\n");
 
         HashSet<int> displayedBiomes = new();
         foreach (VanillaBiomeEntry biome in VanillaBiomes)
@@ -64,7 +87,8 @@ internal static class TerrainMistileCompendium
             AppendBiomeRule(
                 builder,
                 GetLocalizedVanillaBiomeName(biome),
-                TerrainMistileSpawnRules.GetRule(biomeKey));
+                TerrainMistileSpawnRules.GetRule(biomeKey),
+                localizedTopic);
         }
 
         List<BiomeDisplayEntry> customBiomes = new();
@@ -88,16 +112,25 @@ internal static class TerrainMistileCompendium
 
         foreach (BiomeDisplayEntry biome in customBiomes)
         {
-            AppendBiomeRule(builder, biome.DisplayName, TerrainMistileSpawnRules.GetRule(biome.BiomeKey));
+            AppendBiomeRule(
+                builder,
+                biome.DisplayName,
+                TerrainMistileSpawnRules.GetRule(biome.BiomeKey),
+                localizedTopic);
         }
 
-        AppendBiomeRule(builder, "Other biomes (defaults)", TerrainMistileSpawnRules.DefaultRule);
+        AppendBiomeRule(
+            builder,
+            LocalizeOrFallback(OtherBiomesToken, "Other biomes (defaults)"),
+            TerrainMistileSpawnRules.DefaultRule,
+            localizedTopic);
     }
 
     private static void AppendBiomeRule(
         StringBuilder builder,
         string biomeName,
-        TerrainMistileBiomeSpawnRule rule)
+        TerrainMistileBiomeSpawnRule rule,
+        string localizedTopic)
     {
         builder
             .Append("<color=orange><b>")
@@ -106,19 +139,26 @@ internal static class TerrainMistileCompendium
 
         if (!rule.Enabled)
         {
-            builder.Append("TerrainMistile disabled");
+            builder.Append(LocalizeOrFallback(
+                MistileDisabledToken,
+                $"{localizedTopic} spawning disabled",
+                localizedTopic));
         }
         else if (rule.PlayerBaseValue <= 0 || rule.BaseCheckRadius <= 0f)
         {
-            builder.Append("PlayerBase protection disabled");
+            builder.Append(LocalizeOrFallback(
+                ProtectionDisabledToken,
+                "Settlement protection disabled"));
         }
         else
         {
-            builder
-                .Append(rule.PlayerBaseValue)
-                .Append(rule.PlayerBaseValue == 1 ? " unique listed base type within " : " unique listed base types within ")
-                .Append(rule.BaseCheckRadius.ToString("0.##", CultureInfo.InvariantCulture))
-                .Append(" m");
+            string requiredTypes = rule.PlayerBaseValue.ToString(CultureInfo.InvariantCulture);
+            string radius = rule.BaseCheckRadius.ToString("0.##", CultureInfo.InvariantCulture);
+            builder.Append(LocalizeOrFallback(
+                RequirementToken,
+                $"Required facility types: {requiredTypes} · Check radius: {radius} m",
+                requiredTypes,
+                radius));
         }
 
         builder.Append('\n');
@@ -147,14 +187,22 @@ internal static class TerrainMistileCompendium
             displayNameCounts[entry.DisplayName] = count + 1;
         }
 
+        string entryCount = entries.Count.ToString(CultureInfo.InvariantCulture);
         builder
-            .Append("<color=#FFD27A><b>Recognized Base Pieces (")
-            .Append(entries.Count)
-            .Append(")</b></color>\n\n");
+            .Append("<color=#FFD27A><b>")
+            .Append(LocalizeOrFallback(
+                PiecesHeadingToken,
+                $"Recognized Settlement Facilities ({entryCount})",
+                entryCount))
+            .Append("</b></color>\n\n");
 
         if (entries.Count == 0)
         {
-            builder.Append("No base prefabs configured.\n");
+            builder
+                .Append(LocalizeOrFallback(
+                    NoPiecesToken,
+                    "No settlement facilities configured."))
+                .Append('\n');
             return;
         }
 
@@ -211,14 +259,17 @@ internal static class TerrainMistileCompendium
         return LocalizeOrFallback(displayName, fallback);
     }
 
-    private static string LocalizeOrFallback(string value, string fallback)
+    private static string LocalizeOrFallback(
+        string value,
+        string fallback,
+        params string[] words)
     {
         if (string.IsNullOrWhiteSpace(value) || Localization.instance == null)
         {
             return fallback;
         }
 
-        string localized = Localization.instance.Localize(value).Trim();
+        string localized = Localization.instance.Localize(value, words).Trim();
         if (localized.Length == 0)
         {
             return fallback;

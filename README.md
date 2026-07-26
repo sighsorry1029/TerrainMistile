@@ -20,14 +20,29 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - TerrainMistiles target changed terrain points, not players.
 - A TerrainMistile reset happens when it reaches terrain impact or uses its self-destruct attack.
 - Killing a TerrainMistile before self-destruct does not reset terrain.
+- Successful resets prompt nearby players to check the localized TerrainMistile Compendium entry, at most once every 60 seconds.
 - Reset clears player-style `TerrainComp` height and paint deltas in `resetRadius`.
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.
 - TerrainMistiles use nonblocking colliders so terrain and pieces do not trap them before impact.
 
 ## BepInEx Config
 
+- `Enable TerrainMistile`: globally enables new TerrainMistile spawns. Existing TerrainMistiles remain active when disabled.
 - `Lock Configuration`: server admin config lock.
-- `Display Name`: in-game name shown to players. Default: `Earth Warden`.
+
+## Localization
+
+English and Korean localization are embedded in `TerrainMistile.dll`, so the mod keeps its built-in translations when only the DLL is installed. TerrainMistile also loads optional flat YAML files named `TerrainMistile.<Language>.yml` from anywhere under `BepInEx` when the plugin starts. External files add languages or override embedded values. The language must use its exact Valheim/Jötunn name and begin with a capital letter.
+
+For example, a modpack can add French localization without changing the TerrainMistile plugin folder:
+
+```text
+BepInEx/config/TerrainMistile.French.yml
+```
+
+The release archive includes `TerrainMistile.English.yml` as an editable template. Copy it, translate only the values, and keep token keys and placeholders such as `$1` and `$2`. Restart the game after adding or changing a localization file.
+
+Files are loaded in a deterministic path order, with files under `BepInEx/config` loaded last. If more than one file supplies the same language, later files override only their duplicate tokens; invalid files are skipped without blocking valid translations.
 
 ## TerrainMistile.yml
 
