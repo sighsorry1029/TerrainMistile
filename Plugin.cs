@@ -15,9 +15,10 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.7";
+    internal const string ModVersion = "1.0.8";
     internal const string Author = "sighsorry";
     internal const string DisplayNameToken = "$terrainmistile_creature_name";
+    internal const string EnforcerDisplayNameToken = "$terrainmistile_enforcer_name";
     internal const string CompendiumTopicToken = "$terrainmistile_compendium_topic";
     internal const string CheckCompendiumMessageToken = "$terrainmistile_message_check_compendium";
     private const string ModGUID = $"{Author}.{ModName}";

@@ -14,6 +14,7 @@ internal static class TerrainMistileSystem
     private const float ResetEffectGroundOffset = 0.1f;
     private const float FallbackEffectDestroyDelay = 20f;
     private const float ActiveTerrainMistileAreaRadius = 32f;
+    private const float EnforcerTargetSearchRadius = 128f;
     private const float SpawnUnitSize = 32f;
     private const float PlayerBasePieceBucketSize = 32f;
     private const float TerrainHeightDeformationCap = 8f;
@@ -362,6 +363,40 @@ internal static class TerrainMistileSystem
         }
     }
 
+    private static bool TryGetNearestEligiblePlayerPosition(
+        Vector3 center,
+        out Vector3 playerPosition)
+    {
+        bool found = false;
+        float nearestDistanceSqr = float.MaxValue;
+        playerPosition = default;
+
+        foreach (Player player in Player.GetAllPlayers())
+        {
+            if (!player || player.IsDead())
+            {
+                continue;
+            }
+
+            Vector3 candidatePosition = ((Component)player).transform.position;
+            float candidateDistanceSqr =
+                HorizontalDistanceSqr(candidatePosition, center);
+            if (!TerrainTargetPolicy.ShouldReplaceNearest(
+                    found,
+                    nearestDistanceSqr,
+                    candidateDistanceSqr))
+            {
+                continue;
+            }
+
+            found = true;
+            nearestDistanceSqr = candidateDistanceSqr;
+            playerPosition = candidatePosition;
+        }
+
+        return found;
+    }
+
     private static void RollSpawnForTerrainUnit(
         SpawnUnitKey key,
         ModifiedTerrainUnitCandidate unit)
@@ -571,6 +606,23 @@ internal static class TerrainMistileSystem
 
     private static bool TryFindModifiedTerrainNear(Vector3 center, float range, out Vector3 modifiedPoint)
     {
+        return TryFindModifiedTerrainNear(
+            center,
+            range,
+            ignorePlayerBaseProtection: false,
+            requireTerrainOwnership: true,
+            selectNearestToCenter: false,
+            out modifiedPoint);
+    }
+
+    private static bool TryFindModifiedTerrainNear(
+        Vector3 center,
+        float range,
+        bool ignorePlayerBaseProtection,
+        bool requireTerrainOwnership,
+        bool selectNearestToCenter,
+        out Vector3 modifiedPoint)
+    {
         CleanupTargetState();
 
         float rangeSqr = range * range;
@@ -581,8 +633,10 @@ internal static class TerrainMistileSystem
         foreach (TerrainComp terrainComp in TerrainCompAccess.Instances)
         {
             if (!terrainComp ||
-                !terrainComp.IsOwner() ||
-                !TerrainCompAccess.TryCaptureScanData(terrainComp, out TerrainCompAccess.ScanData terrainData))
+                (requireTerrainOwnership && !terrainComp.IsOwner()) ||
+                !TerrainCompAccess.TryCaptureScanData(
+                    terrainComp,
+                    out TerrainCompAccess.ScanData terrainData))
             {
                 continue;
             }
@@ -603,6 +657,8 @@ internal static class TerrainMistileSystem
                 cellCache,
                 center,
                 rangeSqr,
+                ignorePlayerBaseProtection,
+                selectNearestToCenter,
                 ref found,
                 ref bestScore,
                 ref bestPoint);
@@ -617,6 +673,8 @@ internal static class TerrainMistileSystem
         ModifiedTerrainCellCache cellCache,
         Vector3 center,
         float rangeSqr,
+        bool ignorePlayerBaseProtection,
+        bool selectNearestToCenter,
         ref bool found,
         ref float bestScore,
         ref Vector3 bestPoint)
@@ -641,19 +699,34 @@ internal static class TerrainMistileSystem
 
             Vector3 candidate = new(worldX, center.y, worldZ);
             int biome = TerrainMistileSpawnRules.GetBiomeKey(candidate);
-            if (!TerrainMistileSpawnRules.TryGetEnabledRule(biome, out TerrainMistileBiomeSpawnRule rule))
+            if (!TerrainMistileSpawnRules.TryGetEnabledRule(
+                    biome,
+                    out TerrainMistileBiomeSpawnRule rule))
             {
                 continue;
             }
 
-            if (!IsEligibleModifiedTerrainTarget(candidate, rule))
+            if (!IsEligibleModifiedTerrainTarget(
+                    candidate,
+                    rule,
+                    ignorePlayerBaseProtection))
             {
                 continue;
             }
 
-            float deformationPressure = GetHeightDeformationPressure(terrainData, index);
-            float score = GetTargetSpreadScore(candidate, center, deformationPressure);
-            if (!found || score > bestScore)
+            float score = selectNearestToCenter
+                ? HorizontalDistanceSqr(candidate, center)
+                : GetTargetSpreadScore(
+                    candidate,
+                    center,
+                    GetHeightDeformationPressure(terrainData, index));
+            bool shouldReplace = selectNearestToCenter
+                ? TerrainTargetPolicy.ShouldReplaceNearest(
+                    found,
+                    bestScore,
+                    score)
+                : !found || score > bestScore;
+            if (shouldReplace)
             {
                 found = true;
                 bestScore = score;
@@ -693,29 +766,36 @@ internal static class TerrainMistileSystem
         return LastSpawnRollTimeByUnit.TryGetValue(key, out float lastSpawnRoll) && Time.time - lastSpawnRoll < rule.Interval;
     }
 
-    private static bool IsEligibleModifiedTerrainTarget(Vector3 point, TerrainMistileBiomeSpawnRule rule)
+    private static bool IsEligibleModifiedTerrainTarget(
+        Vector3 point,
+        TerrainMistileBiomeSpawnRule rule,
+        bool ignorePlayerBaseProtection = false)
     {
-        if (IsIgnoredByExternalTerrain(point))
+        if (IsIgnoredByExternalTerrain(point) ||
+            IsProtectedTerrainArea(point))
         {
             return false;
         }
 
-        if (IsProtectedTerrainArea(point))
+        bool playerBaseAreaReady = true;
+        bool ignoredByPlayerBase = false;
+        if (!ignorePlayerBaseProtection)
+        {
+            playerBaseAreaReady = IsPlayerBaseAreaReady(point, rule);
+            ignoredByPlayerBase =
+                playerBaseAreaReady &&
+                IsIgnoredByPlayerBase(point, rule);
+        }
+
+        if (!TerrainTargetPolicy.PassesPlayerBaseProtection(
+                ignorePlayerBaseProtection,
+                playerBaseAreaReady,
+                ignoredByPlayerBase))
         {
             return false;
         }
 
-        if (!IsPlayerBaseAreaReady(point, rule) || IsIgnoredByPlayerBase(point, rule))
-        {
-            return false;
-        }
-
-        if (IsTargetSuppressedWithoutCleanup(point))
-        {
-            return false;
-        }
-
-        return true;
+        return !IsTargetSuppressedWithoutCleanup(point);
     }
 
     private static bool IsPlayerBaseAreaReady(Vector3 point, TerrainMistileBiomeSpawnRule rule)
@@ -1285,10 +1365,9 @@ internal static class TerrainMistileSystem
                 continue;
             }
 
-            Vector3 existingTargetPoint = ((Component)character).transform.position;
-            if (behaviour.TryGetTerrainTarget(out Vector3 terrainTarget))
+            if (!behaviour.TryGetTerrainTarget(out Vector3 existingTargetPoint))
             {
-                existingTargetPoint = terrainTarget;
+                continue;
             }
 
             if (HorizontalDistanceSqr(existingTargetPoint, targetPoint) <= areaRadiusSqr)
@@ -1594,17 +1673,7 @@ internal static class TerrainMistileSystem
             return false;
         }
 
-        foreach (TerrainArea area in areas)
-        {
-            if (HorizontalDistanceSqr(point, area.Center) > area.Radius * area.Radius)
-            {
-                continue;
-            }
-
-            return true;
-        }
-
-        return false;
+        return IsPointInsideAnyTerrainArea(point, areas);
     }
 
     private static void CleanupExternalTerrainIgnoreAreas()
@@ -1726,6 +1795,30 @@ internal static class TerrainMistileSystem
         }
 
         return TryFindModifiedTerrainNear(center, range, out modifiedPoint);
+    }
+
+    internal static bool TryFindEnforcerTerrainTarget(
+        Vector3 spawnPoint,
+        out Vector3 modifiedPoint)
+    {
+        if (!TryGetNearestEligiblePlayerPosition(
+                spawnPoint,
+                out Vector3 playerPosition))
+        {
+            modifiedPoint = default;
+            return false;
+        }
+
+        float range = Mathf.Max(
+            EnforcerTargetSearchRadius,
+            TerrainMistileSpawnRules.MaxPlayerSearchRadius);
+        return TryFindModifiedTerrainNear(
+            playerPosition,
+            range,
+            ignorePlayerBaseProtection: true,
+            requireTerrainOwnership: false,
+            selectNearestToCenter: true,
+            out modifiedPoint);
     }
 
     private static bool TryFindCachedModifiedTerrainNear(Vector3 center, float range, out Vector3 modifiedPoint)
@@ -2102,5 +2195,25 @@ internal static class TerrainMistileSystem
         public Vector3 TargetPoint;
         public float BestScore;
         public float MaxDeformationPressure;
+    }
+}
+
+internal static class TerrainTargetPolicy
+{
+    internal static bool PassesPlayerBaseProtection(
+        bool ignorePlayerBaseProtection,
+        bool playerBaseAreaReady,
+        bool ignoredByPlayerBase)
+    {
+        return ignorePlayerBaseProtection ||
+               (playerBaseAreaReady && !ignoredByPlayerBase);
+    }
+
+    internal static bool ShouldReplaceNearest(
+        bool found,
+        float nearestDistanceSqr,
+        float candidateDistanceSqr)
+    {
+        return !found || candidateDistanceSqr < nearestDistanceSqr;
     }
 }

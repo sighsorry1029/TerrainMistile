@@ -9,11 +9,15 @@ namespace TerrainMistile;
 internal static class TerrainMistilePrefab
 {
     internal const string PrefabName = "TerrainMistile";
+    internal const string EnforcerPrefabName = "TerrainMistileEnforcer";
     private const string SourcePrefabName = "Mistile";
     private static bool _hooked;
-    private static bool _registered;
+    private static bool _terrainMistileRegistered;
+    private static bool _enforcerRegistered;
     private static GameObject? _registeredPrefab;
+    private static GameObject? _registeredEnforcerPrefab;
     private static readonly List<Material> RegisteredPrefabVisualMaterials = new();
+    private static readonly List<Material> RegisteredEnforcerPrefabVisualMaterials = new();
 
     internal static void RegisterPrefabHook()
     {
@@ -39,22 +43,47 @@ internal static class TerrainMistilePrefab
 
     private static void CreateTerrainMistilePrefab()
     {
-        if (_registered)
+        if (!_terrainMistileRegistered &&
+            TryCreateTerrainMistilePrefab(
+                PrefabName,
+                enforcer: false,
+                RegisteredPrefabVisualMaterials,
+                out GameObject? prefab))
         {
-            return;
+            _registeredPrefab = prefab;
+            _terrainMistileRegistered = true;
         }
 
-        GameObject prefab = PrefabManager.Instance.CreateClonedPrefab(PrefabName, SourcePrefabName);
+        if (!_enforcerRegistered &&
+            TryCreateTerrainMistilePrefab(
+                EnforcerPrefabName,
+                enforcer: true,
+                RegisteredEnforcerPrefabVisualMaterials,
+                out GameObject? enforcerPrefab))
+        {
+            _registeredEnforcerPrefab = enforcerPrefab;
+            _enforcerRegistered = true;
+        }
+    }
+
+    private static bool TryCreateTerrainMistilePrefab(
+        string prefabName,
+        bool enforcer,
+        List<Material> registeredVisualMaterials,
+        out GameObject? registeredPrefab)
+    {
+        registeredPrefab = null;
+        GameObject prefab = PrefabManager.Instance.CreateClonedPrefab(prefabName, SourcePrefabName);
         if (!prefab)
         {
-            TerrainMistilePlugin.TerrainMistileLogger.LogError($"Could not clone vanilla prefab '{SourcePrefabName}'.");
-            return;
+            TerrainMistilePlugin.TerrainMistileLogger.LogError(
+                $"Could not clone vanilla prefab '{SourcePrefabName}' as '{prefabName}'.");
+            return false;
         }
 
         Character character = prefab.GetComponent<Character>();
         if (character)
         {
-            character.m_name = TerrainMistilePlugin.DisplayNameToken;
             character.m_faction = Character.Faction.Boss;
             character.m_aiSkipTarget = true;
         }
@@ -76,29 +105,57 @@ internal static class TerrainMistilePrefab
             humanoid.m_defaultItems = Array.Empty<GameObject>();
         }
 
-        if (!prefab.GetComponent<TerrainMistileBehaviour>())
+        TerrainMistileBehaviour behaviour = prefab.GetComponent<TerrainMistileBehaviour>();
+        if (!behaviour)
         {
-            prefab.AddComponent<TerrainMistileBehaviour>();
+            behaviour = prefab.AddComponent<TerrainMistileBehaviour>();
+        }
+
+        behaviour.ConfigureEnforcer(enforcer);
+        if (character)
+        {
+            character.m_name = enforcer
+                ? TerrainMistilePlugin.EnforcerDisplayNameToken
+                : TerrainMistilePlugin.DisplayNameToken;
         }
 
         MakeCollidersNonBlocking(prefab);
-        ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor, RegisteredPrefabVisualMaterials);
+        ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor, registeredVisualMaterials);
         PrefabManager.Instance.AddPrefab(prefab);
-        _registeredPrefab = prefab;
-        _registered = true;
-        TerrainMistilePlugin.TerrainMistileLogger.LogInfo($"Registered '{PrefabName}' prefab from '{SourcePrefabName}'.");
+        registeredPrefab = prefab;
+        TerrainMistilePlugin.TerrainMistileLogger.LogInfo(
+            $"Registered '{prefabName}' prefab from '{SourcePrefabName}'.");
+        return true;
     }
 
     internal static void RefreshRegisteredPrefabVisuals()
     {
-        GameObject? prefab = _registeredPrefab
-            ? _registeredPrefab
+        RefreshRegisteredPrefabVisuals(
+            PrefabName,
+            _registeredPrefab,
+            RegisteredPrefabVisualMaterials);
+        RefreshRegisteredPrefabVisuals(
+            EnforcerPrefabName,
+            _registeredEnforcerPrefab,
+            RegisteredEnforcerPrefabVisualMaterials);
+    }
+
+    private static void RefreshRegisteredPrefabVisuals(
+        string prefabName,
+        GameObject? registeredPrefab,
+        List<Material> registeredVisualMaterials)
+    {
+        GameObject? prefab = registeredPrefab
+            ? registeredPrefab
             : ZNetScene.instance
-                ? ZNetScene.instance.GetPrefab(PrefabName)
+                ? ZNetScene.instance.GetPrefab(prefabName)
                 : null;
         if (prefab)
         {
-            RefreshRegisteredPrefabVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor);
+            RefreshRegisteredPrefabVisuals(
+                prefab,
+                TerrainMistileSpawnRules.DefaultVisualColor,
+                registeredVisualMaterials);
         }
     }
 
@@ -144,26 +201,29 @@ internal static class TerrainMistilePrefab
         }
     }
 
-    private static void RefreshRegisteredPrefabVisuals(GameObject root, Color color)
+    private static void RefreshRegisteredPrefabVisuals(
+        GameObject root,
+        Color color,
+        List<Material> registeredVisualMaterials)
     {
         ApplyLightColor(root, color);
         ApplyParticleColor(root, color);
 
-        for (int i = RegisteredPrefabVisualMaterials.Count - 1; i >= 0; i--)
+        for (int i = registeredVisualMaterials.Count - 1; i >= 0; i--)
         {
-            Material material = RegisteredPrefabVisualMaterials[i];
+            Material material = registeredVisualMaterials[i];
             if (!material)
             {
-                RegisteredPrefabVisualMaterials.RemoveAt(i);
+                registeredVisualMaterials.RemoveAt(i);
                 continue;
             }
 
             ApplyMaterialProperties(material, color);
         }
 
-        if (RegisteredPrefabVisualMaterials.Count == 0)
+        if (registeredVisualMaterials.Count == 0)
         {
-            ApplyMaterialColor(root, color, RegisteredPrefabVisualMaterials);
+            ApplyMaterialColor(root, color, registeredVisualMaterials);
         }
     }
 

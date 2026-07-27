@@ -25,6 +25,35 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.
 - TerrainMistiles use nonblocking colliders so terrain and pieces do not trap them before impact.
 
+## TerrainMistileEnforcer
+
+`TerrainMistileEnforcer` is a same-size companion prefab intended for external spawn systems such as DropNSpawn events. TerrainMistile does not spawn it through its own periodic spawn rolls.
+
+- It selects the horizontally nearest living player to its spawn point, then targets the horizontally closest eligible changed terrain around that player.
+- Its localized display name uses the separate `terrainmistile_enforcer_name` token.
+- Its horizontal target search radius is the larger of 128m and the highest enabled biome `playerSearchRadius`.
+- It ignores only the TerrainMistile `playerBaseValue` target suppression.
+- The target biome must still have an enabled TerrainMistile rule.
+- Expand World Data/location protected terrain, temporary external terrain exclusions, and existing target reservations remain protected.
+- Its reset radius and visual color come from the current target biome rule; initial health comes from the first acquired target. Biomes without a dedicated rule use `defaults`.
+- It retries target acquisition for 10 seconds and then despawns without resetting if no eligible changed terrain is found.
+- A targetless Enforcer does not consume the normal TerrainMistile `maxSpawn` allowance.
+
+DropNSpawn event entries must specify a biome, and `insidePlayerBase: true` is needed when the native SpawnSystem spawn point itself may be inside a vanilla PlayerBase effect area:
+
+```yml
+spawns:
+  - prefab: TerrainMistileEnforcer
+    spawnSystem:
+      biomes: [All]
+      insidePlayerBase: true
+      huntPlayer: false
+```
+
+`huntPlayer` does not affect Enforcer terrain selection or movement; leave it false or omit it.
+
+DropNSpawn event `spawns` replace that event's entire spawn list, so keep any existing event spawn entries that should remain.
+
 ## BepInEx Config
 
 - `Enable TerrainMistile`: globally enables new TerrainMistile spawns. Existing TerrainMistiles remain active when disabled.

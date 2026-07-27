@@ -11,6 +11,7 @@ public sealed class TerrainMistileLocalizationTests
     private static readonly string[] ExpectedTokens =
     {
         "terrainmistile_creature_name",
+        "terrainmistile_enforcer_name",
         "terrainmistile_compendium_topic",
         "terrainmistile_message_check_compendium",
         "terrainmistile_compendium_explanation",
@@ -125,6 +126,9 @@ public sealed class TerrainMistileLocalizationTests
         Assert.AreEqual(
             "대지의 수호자",
             translationsByLanguage["Korean"]["terrainmistile_creature_name"]);
+        Assert.AreEqual(
+            "대지의 집행자",
+            translationsByLanguage["Korean"]["terrainmistile_enforcer_name"]);
     }
 
     [TestMethod]

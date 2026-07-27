@@ -1,4 +1,5 @@
 terrainmistile_creature_name: "Earth Warden"
+terrainmistile_enforcer_name: "Earth Warden Enforcer"
 terrainmistile_compendium_topic: "TerrainMistile"
 terrainmistile_message_check_compendium: "Check the Compendium: $1"
 terrainmistile_compendium_explanation: "Protection counts different recognized settlement facility types around each altered terrain point. Multiple copies of the same facility count as one type. $1 spawning is blocked on protected terrain."

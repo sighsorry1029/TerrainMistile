@@ -40,6 +40,94 @@ public sealed class TerrainMistileSpawnRulesTests
     }
 
     [TestMethod]
+    public void EnforcerPrefabNameIsStableAndDistinct()
+    {
+        FieldInfo? enforcerNameField = typeof(TerrainMistilePrefab).GetField(
+            nameof(TerrainMistilePrefab.EnforcerPrefabName),
+            BindingFlags.Static | BindingFlags.NonPublic);
+        FieldInfo? standardNameField = typeof(TerrainMistilePrefab).GetField(
+            nameof(TerrainMistilePrefab.PrefabName),
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        Assert.IsNotNull(enforcerNameField);
+        Assert.IsNotNull(standardNameField);
+        Assert.AreEqual("TerrainMistileEnforcer", enforcerNameField.GetRawConstantValue());
+        Assert.AreNotEqual(
+            standardNameField.GetRawConstantValue(),
+            enforcerNameField.GetRawConstantValue());
+    }
+
+    [TestMethod]
+    [DataRow(false, true, false, true)]
+    [DataRow(false, false, false, false)]
+    [DataRow(false, true, true, false)]
+    [DataRow(true, false, true, true)]
+    public void EnforcerTargetPolicyBypassesPlayerBase(
+        bool ignorePlayerBaseProtection,
+        bool playerBaseAreaReady,
+        bool ignoredByPlayerBase,
+        bool expected)
+    {
+        bool actual = TerrainTargetPolicy.PassesPlayerBaseProtection(
+            ignorePlayerBaseProtection,
+            playerBaseAreaReady,
+            ignoredByPlayerBase);
+
+        Assert.AreEqual(expected, actual);
+    }
+
+    [TestMethod]
+    [DataRow(false, 0f, 100f, true)]
+    [DataRow(true, 100f, 25f, true)]
+    [DataRow(true, 100f, 100f, false)]
+    [DataRow(true, 100f, 225f, false)]
+    public void EnforcerNearestTargetSelectionPrefersOnlyCloserCandidates(
+        bool found,
+        float nearestDistanceSqr,
+        float candidateDistanceSqr,
+        bool expected)
+    {
+        Assert.AreEqual(
+            expected,
+            TerrainTargetPolicy.ShouldReplaceNearest(
+                found,
+                nearestDistanceSqr,
+                candidateDistanceSqr));
+    }
+
+    [TestMethod]
+    public void TargetBiomeVisualColorUsesOverrideOrDefaultFallback()
+    {
+        const string yaml =
+            "defaults:\n" +
+            "  visualColor: \"#112233\"\n" +
+            "Meadows:\n" +
+            "  visualColor: \"#AABBCC\"\n";
+
+        Assert.IsTrue(TerrainMistileSpawnRules.LoadYamlText(yaml, "color fallback test"));
+        try
+        {
+            AssertColor(
+                TerrainMistileSpawnRules.GetRule((int)Heightmap.Biome.Meadows),
+                0xAA,
+                0xBB,
+                0xCC,
+                0xFF);
+            AssertColor(
+                TerrainMistileSpawnRules.GetRule((int)Heightmap.Biome.BlackForest),
+                0x11,
+                0x22,
+                0x33,
+                0xFF);
+        }
+        finally
+        {
+            Assert.IsTrue(
+                TerrainMistileSpawnRules.LoadYamlText("", "restore built-in defaults"));
+        }
+    }
+
+    [TestMethod]
     public void EmptyYamlUsesBuiltInDefaults()
     {
         ParsedRules parsed = Parse("");

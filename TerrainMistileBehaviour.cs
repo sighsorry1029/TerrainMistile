@@ -15,10 +15,13 @@ public class TerrainMistileBehaviour : MonoBehaviour
     private const float TerrainImpactHeight = 0.85f;
     private const float TerrainTargetGroundOffset = 0.15f;
     private const float VisualSyncRetryInterval = 0.25f;
+    private const float EnforcerTargetSearchInterval = 1f;
+    private const float EnforcerTargetSearchTimeout = 10f;
 
     private Character _character = null!;
     private MonsterAI _monsterAI = null!;
     private ZNetView _nview = null!;
+    [SerializeField] private bool _enforcer;
     private Vector3 _terrainTarget;
     private float _resetRadius = 8f;
     private bool _hasTerrainTarget;
@@ -27,10 +30,15 @@ public class TerrainMistileBehaviour : MonoBehaviour
     private bool _terrainResetInProgress;
     private bool _visualColorApplied;
     private float _nextVisualSyncTime;
+    private bool _enforcerTargetSearchInitialized;
+    private float _nextEnforcerTargetSearchTime;
+    private float _enforcerTargetSearchDeadline;
+    private Vector3 _enforcerSpawnPoint;
     private readonly List<Material> _ownedVisualMaterials = new();
 
     private void Awake()
     {
+        _enforcerSpawnPoint = transform.position;
         _character = GetComponent<Character>();
         _monsterAI = GetComponent<MonsterAI>();
         _nview = GetComponent<ZNetView>();
@@ -68,7 +76,8 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        if (!TryLoadTerrainTarget())
+        if (!TryLoadTerrainTarget() &&
+            !TryAcquireEnforcerTerrainTarget())
         {
             return;
         }
@@ -82,6 +91,11 @@ public class TerrainMistileBehaviour : MonoBehaviour
         ConfigureTerrainSeeker();
         ApplyHealth(health);
         SetTerrainTarget(terrainOperationPoint, resetRadius);
+    }
+
+    internal void ConfigureEnforcer(bool enforcer)
+    {
+        _enforcer = enforcer;
     }
 
     internal void MarkSelfDestruct()
@@ -100,7 +114,9 @@ public class TerrainMistileBehaviour : MonoBehaviour
             return;
         }
 
-        _character.m_name = TerrainMistilePlugin.DisplayNameToken;
+        _character.m_name = _enforcer
+            ? TerrainMistilePlugin.EnforcerDisplayNameToken
+            : TerrainMistilePlugin.DisplayNameToken;
         _character.m_faction = Character.Faction.Boss;
         _character.m_aiSkipTarget = true;
         _character.m_flying = true;
@@ -196,9 +212,10 @@ public class TerrainMistileBehaviour : MonoBehaviour
 
         if (_nview && _nview.IsValid() && _nview.IsOwner())
         {
-            _nview.GetZDO().Set(TerrainSourceZdoKey, terrainOperationPoint);
-            _nview.GetZDO().Set(TerrainSourceSetZdoKey, true);
-            _nview.GetZDO().Set(ResetRadiusZdoKey, _resetRadius);
+            ZDO zdo = _nview.GetZDO();
+            zdo.Set(TerrainSourceZdoKey, terrainOperationPoint);
+            zdo.Set(ResetRadiusZdoKey, _resetRadius);
+            zdo.Set(TerrainSourceSetZdoKey, true);
         }
     }
 
@@ -229,6 +246,47 @@ public class TerrainMistileBehaviour : MonoBehaviour
         }
 
         return true;
+    }
+
+    private bool TryAcquireEnforcerTerrainTarget()
+    {
+        if (!_enforcer)
+        {
+            return false;
+        }
+
+        if (!_enforcerTargetSearchInitialized)
+        {
+            _enforcerTargetSearchInitialized = true;
+            _nextEnforcerTargetSearchTime = Time.time;
+            _enforcerTargetSearchDeadline = Time.time + EnforcerTargetSearchTimeout;
+        }
+
+        if (Time.time < _nextEnforcerTargetSearchTime)
+        {
+            return false;
+        }
+
+        _nextEnforcerTargetSearchTime = Time.time + EnforcerTargetSearchInterval;
+        if (TerrainMistileSystem.TryFindEnforcerTerrainTarget(
+                _enforcerSpawnPoint,
+                out Vector3 terrainTarget))
+        {
+            int biome = TerrainMistileSpawnRules.GetBiomeKey(terrainTarget);
+            TerrainMistileBiomeSpawnRule rule =
+                TerrainMistileSpawnRules.GetRule(
+                    biome);
+
+            Initialize(terrainTarget, rule.ResetRadius, rule.Health);
+            return true;
+        }
+
+        if (Time.time >= _enforcerTargetSearchDeadline)
+        {
+            DestroyWithoutTerrainReset();
+        }
+
+        return false;
     }
 
     internal bool TryGetTerrainTarget(out Vector3 terrainTarget)
@@ -364,7 +422,14 @@ public class TerrainMistileBehaviour : MonoBehaviour
         }
 
         ReleaseCurrentTerrainTarget();
-        if (TerrainMistileSystem.TryFindReplacementTerrainTarget(transform.position, out Vector3 replacementTarget))
+        bool foundReplacement = _enforcer
+            ? TerrainMistileSystem.TryFindEnforcerTerrainTarget(
+                _enforcerSpawnPoint,
+                out Vector3 replacementTarget)
+            : TerrainMistileSystem.TryFindReplacementTerrainTarget(
+                transform.position,
+                out replacementTarget);
+        if (foundReplacement)
         {
             SetTerrainTarget(replacementTarget, TerrainMistileSystem.GetResetRadiusForPoint(replacementTarget));
             return true;
