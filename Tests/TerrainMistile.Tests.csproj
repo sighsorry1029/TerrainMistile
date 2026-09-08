@@ -25,6 +25,10 @@
   <ItemGroup>
     <ProjectReference Include="..\TerrainMistile.csproj"
                       AdditionalProperties="PackageMod=false;DeployToGame=false" />
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExPath)\core\BepInEx.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
     <Reference Include="assembly_valheim">
       <HintPath>$(CorlibPath)\assembly_valheim.dll</HintPath>
       <Private>true</Private>
@@ -35,6 +39,10 @@
     </Reference>
     <Reference Include="assembly_utils">
       <HintPath>$(CorlibPath)\assembly_utils.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(CorlibPath)\UnityEngine.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">

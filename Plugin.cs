@@ -15,7 +15,7 @@ namespace TerrainMistile;
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.8";
+    internal const string ModVersion = "1.0.9";
     internal const string Author = "sighsorry";
     internal const string DisplayNameToken = "$terrainmistile_creature_name";
     internal const string EnforcerDisplayNameToken = "$terrainmistile_enforcer_name";
@@ -57,37 +57,39 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         TerrainCompAccess.Initialize();
         bool saveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
-
-        _terrainMistileEnabled = config(
-            "1 - General",
-            "Enable TerrainMistile",
-            Toggle.On,
-            "Globally enables new TerrainMistile spawns. Existing TerrainMistiles are not removed when disabled.");
-        _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
-        _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
-        RemoveObsoleteDisplayNameConfig();
-
-        TerrainMistileSpawnRules.Initialize(TerrainMistileLogger);
-        TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
-        SpawnRulesYaml = new CustomSyncedValue<string>(ConfigSync, "SpawnRulesYaml", string.Empty);
-        SpawnRulesYaml.ValueChanged += OnSyncedSpawnRulesYamlChanged;
-        ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
-        ApplySpawnRulesYaml(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
-
-        TerrainMistilePrefab.RegisterPrefabHook();
-
-        Assembly assembly = Assembly.GetExecutingAssembly();
-        _harmony.PatchAll(assembly);
-        TerrainMistileExternalTerrainCompat.Initialize(TerrainMistileLogger, _harmony);
-        SetupWatcher();
-        if (ConfigSync.IsSourceOfTruth)
+        try
         {
-            PushLocalSpawnRulesYamlToSync();
-        }
+            _terrainMistileEnabled = config(
+                "1 - General",
+                "Enable TerrainMistile",
+                Toggle.On,
+                "Globally enables new TerrainMistile spawns. Existing TerrainMistiles are not removed when disabled.");
+            _serverConfigLocked = config("1 - General", "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
+            _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
+            RemoveObsoleteDisplayNameConfig();
 
-        Config.Save();
-        _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
-        if (saveOnSet)
+            TerrainMistileSpawnRules.Initialize(TerrainMistileLogger);
+            TerrainMistileSpawnRules.EnsureFileExists(SpawnRulesFileFullPath);
+            SpawnRulesYaml = new CustomSyncedValue<string>(ConfigSync, "SpawnRulesYaml", string.Empty);
+            SpawnRulesYaml.ValueChanged += OnSyncedSpawnRulesYamlChanged;
+            ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
+            ApplySpawnRulesYaml(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
+
+            TerrainMistilePrefab.RegisterPrefabHook();
+
+            Assembly assembly = Assembly.GetExecutingAssembly();
+            _harmony.PatchAll(assembly);
+            TerrainMistileExternalTerrainCompat.Initialize(TerrainMistileLogger, _harmony);
+            SetupWatcher();
+            if (ConfigSync.IsSourceOfTruth)
+            {
+                PushLocalSpawnRulesYamlToSync();
+            }
+
+            Config.Save();
+            _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
+        }
+        finally
         {
             Config.SaveOnConfigSet = saveOnSet;
         }
@@ -95,12 +97,27 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
-        TerrainMistilePrefab.UnregisterPrefabHook();
-        SpawnRulesYaml.ValueChanged -= OnSyncedSpawnRulesYamlChanged;
-        ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
-        SaveWithRespectToConfigSet();
-        _watcher?.Dispose();
-        _spawnRulesWatcher?.Dispose();
+        try
+        {
+            TerrainMistilePrefab.UnregisterPrefabHook();
+            if (SpawnRulesYaml != null)
+            {
+                SpawnRulesYaml.ValueChanged -= OnSyncedSpawnRulesYamlChanged;
+            }
+            ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
+            ConfigPersistence.Save(Config);
+        }
+        finally
+        {
+            try
+            {
+                _watcher?.Dispose();
+            }
+            finally
+            {
+                _spawnRulesWatcher?.Dispose();
+            }
+        }
     }
 
     private void Update()
@@ -161,7 +178,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
                     return;
                 }
 
-                SaveWithRespectToConfigSet(true);
+                ConfigPersistence.Save(Config, reload: true);
                 _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
                 TerrainMistileLogger.LogInfo("Configuration reload complete.");
             }
@@ -274,19 +291,25 @@ public class TerrainMistilePlugin : BaseUnityPlugin
         return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 
-    private void SaveWithRespectToConfigSet(bool reload = false)
+    // Kept separate from plugin initialization so config I/O can run without Unity or ServerSync.
+    private static class ConfigPersistence
     {
-        bool originalSaveOnSet = Config.SaveOnConfigSet;
-        Config.SaveOnConfigSet = false;
-        if (reload)
-            Config.Reload();
-        Config.Save();
-        if (originalSaveOnSet)
+        public static void Save(ConfigFile config, bool reload = false)
         {
-            Config.SaveOnConfigSet = originalSaveOnSet;
+            bool originalSaveOnSet = config.SaveOnConfigSet;
+            config.SaveOnConfigSet = false;
+            try
+            {
+                if (reload)
+                    config.Reload();
+                config.Save();
+            }
+            finally
+            {
+                config.SaveOnConfigSet = originalSaveOnSet;
+            }
         }
     }
-
 
     #region ConfigOptions
 

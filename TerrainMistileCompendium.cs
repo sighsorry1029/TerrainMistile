@@ -20,6 +20,8 @@ internal static class TerrainMistileCompendium
     private const string OtherBiomesToken = "$terrainmistile_compendium_other_biomes";
     private const string PiecesHeadingToken = "$terrainmistile_compendium_pieces_heading";
     private const string NoPiecesToken = "$terrainmistile_compendium_no_pieces";
+    private const float GuidanceCooldown = 60f;
+    private static float _nextGuidanceTime;
 
     private static readonly VanillaBiomeEntry[] VanillaBiomes =
     {
@@ -37,6 +39,47 @@ internal static class TerrainMistileCompendium
     private static void Postfix(List<TextsDialog.TextInfo> ___m_texts)
     {
         AddPage(___m_texts);
+    }
+
+    internal static void ResetGuidanceState()
+    {
+        _nextGuidanceTime = 0f;
+    }
+
+    internal static void TryShowGuidance(Vector3 center)
+    {
+        Player? localPlayer = Player.m_localPlayer;
+        if (!localPlayer ||
+            localPlayer.IsDead() ||
+            Time.time < _nextGuidanceTime)
+        {
+            return;
+        }
+
+        TerrainMistileBiomeSpawnRule rule =
+            TerrainMistileSpawnRules.GetRule(TerrainMistileSpawnRules.GetBiomeKey(center));
+        if (rule.PlayerBaseValue <= 0 || rule.BaseCheckRadius <= 0f)
+        {
+            return;
+        }
+
+        Vector3 playerPosition = ((Component)localPlayer).transform.position;
+        float dx = playerPosition.x - center.x;
+        float dz = playerPosition.z - center.z;
+        if (dx * dx + dz * dz > ZoneSystem.c_ZoneSize * ZoneSystem.c_ZoneSize)
+        {
+            return;
+        }
+
+        string topic = Localization.instance != null
+            ? Localization.instance.Localize(TerrainMistilePlugin.CompendiumTopicToken)
+            : TerrainMistilePlugin.ModName;
+        string message = Localization.instance != null
+            ? Localization.instance.Localize(TerrainMistilePlugin.CheckCompendiumMessageToken, topic)
+            : $"Check the Compendium: {topic}";
+
+        localPlayer.Message(MessageHud.MessageType.Center, message);
+        _nextGuidanceTime = Time.time + GuidanceCooldown;
     }
 
     private static void AddPage(List<TextsDialog.TextInfo> texts)

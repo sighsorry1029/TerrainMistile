@@ -22,7 +22,6 @@ internal static class TerrainMistileSystem
     private const float SpawnUnitRollStateRetention = 600f;
     private const float ModifiedTerrainCellCacheRefreshInterval = 3f;
     private const float PlayerBasePieceBucketRefreshInterval = 2f;
-    private const float CompendiumGuidanceCooldown = 60f;
     private const float TargetReservationDuration = 60f;
     private const float ExternalTerrainIgnoreMergeDistance = 0.25f;
     private const float ProtectedTerrainAreaBucketSize = 32f;
@@ -68,7 +67,6 @@ internal static class TerrainMistileSystem
     private static int _playerBaseZoneReadinessFrame = -1;
     private static bool _resettingTerrain;
     private static float _nextSpawnUnitScanTime;
-    private static float _nextCompendiumGuidanceTime;
     private static bool _protectedTerrainAreasDirty;
     private static bool _protectedTerrainAreaBucketsDirty = true;
     private static bool _protectedTerrainAreasClientSynced;
@@ -340,7 +338,7 @@ internal static class TerrainMistileSystem
         NextProtectedTerrainAreaResponseTimeByPeer.Clear();
         _resettingTerrain = false;
         _nextSpawnUnitScanTime = 0f;
-        _nextCompendiumGuidanceTime = 0f;
+        TerrainMistileCompendium.ResetGuidanceState();
         _protectedTerrainAreasDirty = false;
         _protectedTerrainAreaBucketsDirty = true;
         _protectedTerrainAreasClientSynced = false;
@@ -509,6 +507,7 @@ internal static class TerrainMistileSystem
     private static void CollectModifiedTerrainUnits()
     {
         CleanupTargetState();
+        CleanupExternalTerrainIgnoreAreas();
         CleanupModifiedTerrainCellCaches();
         ModifiedTerrainUnits.Clear();
         TempCooldownSpawnUnitKeys.Clear();
@@ -624,6 +623,7 @@ internal static class TerrainMistileSystem
         out Vector3 modifiedPoint)
     {
         CleanupTargetState();
+        CleanupExternalTerrainIgnoreAreas();
 
         float rangeSqr = range * range;
         bool found = false;
@@ -771,7 +771,8 @@ internal static class TerrainMistileSystem
         TerrainMistileBiomeSpawnRule rule,
         bool ignorePlayerBaseProtection = false)
     {
-        if (IsIgnoredByExternalTerrain(point) ||
+        // Scan entry points expire external ignore areas before checking candidates.
+        if (IsPointInsideAnyTerrainArea(point, ExternalTerrainIgnoreAreas) ||
             IsProtectedTerrainArea(point))
         {
             return false;
@@ -1235,38 +1236,7 @@ internal static class TerrainMistileSystem
 
         CreateEffectPrefab(ResetVfxPrefabName, effectPoint);
         CreateEffectPrefab(ResetSfxPrefabName, effectPoint);
-        TryShowCompendiumGuidance(center);
-    }
-
-    private static void TryShowCompendiumGuidance(Vector3 center)
-    {
-        Player? localPlayer = Player.m_localPlayer;
-        if (!localPlayer ||
-            localPlayer.IsDead() ||
-            Time.time < _nextCompendiumGuidanceTime)
-        {
-            return;
-        }
-
-        TerrainMistileBiomeSpawnRule rule =
-            TerrainMistileSpawnRules.GetRule(TerrainMistileSpawnRules.GetBiomeKey(center));
-        if (rule.PlayerBaseValue <= 0 ||
-            rule.BaseCheckRadius <= 0f ||
-            HorizontalDistanceSqr(((Component)localPlayer).transform.position, center) >
-            ZoneSystem.c_ZoneSize * ZoneSystem.c_ZoneSize)
-        {
-            return;
-        }
-
-        string topic = Localization.instance != null
-            ? Localization.instance.Localize(TerrainMistilePlugin.CompendiumTopicToken)
-            : TerrainMistilePlugin.ModName;
-        string message = Localization.instance != null
-            ? Localization.instance.Localize(TerrainMistilePlugin.CheckCompendiumMessageToken, topic)
-            : $"Check the Compendium: {topic}";
-
-        localPlayer.Message(MessageHud.MessageType.Center, message);
-        _nextCompendiumGuidanceTime = Time.time + CompendiumGuidanceCooldown;
+        TerrainMistileCompendium.TryShowGuidance(center);
     }
 
     private static void CreateEffectPrefab(string prefabName, Vector3 point)
@@ -1641,12 +1611,6 @@ internal static class TerrainMistileSystem
             LocationTerrainIgnoreDuration);
     }
 
-    private static bool IsIgnoredByExternalTerrain(Vector3 point)
-    {
-        CleanupExternalTerrainIgnoreAreas();
-        return IsPointInsideAnyTerrainArea(point, ExternalTerrainIgnoreAreas);
-    }
-
     private static bool IsProtectedTerrainArea(Vector3 point)
     {
         if (ZNet.instance != null &&
@@ -1824,6 +1788,7 @@ internal static class TerrainMistileSystem
     private static bool TryFindCachedModifiedTerrainNear(Vector3 center, float range, out Vector3 modifiedPoint)
     {
         CleanupTargetState();
+        CleanupExternalTerrainIgnoreAreas();
 
         float rangeSqr = range * range;
         bool found = false;
