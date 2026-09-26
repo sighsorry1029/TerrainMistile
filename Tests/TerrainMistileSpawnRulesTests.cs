@@ -545,6 +545,79 @@ public sealed class TerrainMistileSpawnRulesTests
     }
 
     [TestMethod]
+    [DataRow(true, false, 1f, 66f)]
+    [DataRow(false, true, 1f, 66f)]
+    [DataRow(true, true, 12f, 77f)]
+    public void EwdBlueprintSnapshotsOutgrowExplicitLocationRadius(
+        bool height, bool paint, float spacing, float expectedRadius)
+    {
+        ExternalBlueprintData blueprint = new()
+        {
+            Radius = 60f,
+            TerrainHeight = height ? new ExternalSnapshotData { DistanceBetweenNodes = spacing } : null,
+            TerrainPaint = paint ? new ExternalSnapshotData { DistanceBetweenNodes = spacing } : null
+        };
+        ExternalTerrainData data = new() { exteriorRadius = 20f, levelArea = "false" };
+
+        Assert.AreEqual(expectedRadius,
+            TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(20f, data, blueprint), Tolerance);
+        Assert.AreEqual(expectedRadius,
+            TerrainMistileExternalTerrainCompat.GetBlueprintSnapshotRadius(blueprint) + 5f, Tolerance);
+    }
+
+    [TestMethod]
+    public void EwdBlueprintWithoutSnapshotRetainsConfiguredProtection()
+    {
+        ExternalBlueprintData blueprint = new()
+        {
+            Radius = 60f,
+            TerrainHeight = new ExternalSnapshotData { HasValues = false }
+        };
+
+        Assert.AreEqual(0f, TerrainMistileExternalTerrainCompat.GetBlueprintSnapshotRadius(blueprint));
+        Assert.AreEqual(25f, TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(
+            20f, new ExternalTerrainData(), blueprint), Tolerance);
+    }
+
+    [TestMethod]
+    public void EwdBlueprintPreservesLargerYamlProtectionAndReadsReloadedBounds()
+    {
+        ExternalBlueprintData blueprint = new()
+        {
+            Radius = 30f,
+            TerrainHeight = new ExternalSnapshotData(),
+            TerrainPaint = new ExternalSnapshotData { DistanceBetweenNodes = 3f }
+        };
+        ExternalTerrainData data = new() { levelArea = "false", paint = "grass", paintRadius = 70f, paintBorder = 8f };
+
+        Assert.AreEqual(83f, TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(20f, data, blueprint), Tolerance);
+        data.noBuild = "90";
+        Assert.AreEqual(95f, TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(20f, data, blueprint), Tolerance);
+        blueprint.Radius = 100f;
+        Assert.AreEqual(108f, TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(20f, data, blueprint), Tolerance);
+        Assert.AreEqual(108f, TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(0f, null, blueprint), Tolerance);
+    }
+
+    [TestMethod]
+    [DataRow(float.NaN, 1f)]
+    [DataRow(float.PositiveInfinity, 1f)]
+    [DataRow(-1f, 1f)]
+    [DataRow(20f, 0f)]
+    [DataRow(20f, float.NaN)]
+    [DataRow(20f, float.PositiveInfinity)]
+    public void EwdInvalidSnapshotBoundsAbortInsteadOfShrinkingProtection(float radius, float spacing)
+    {
+        ExternalBlueprintData blueprint = new()
+        {
+            Radius = radius,
+            TerrainHeight = new ExternalSnapshotData { DistanceBetweenNodes = spacing }
+        };
+
+        Assert.ThrowsExactly<InvalidOperationException>(() =>
+            TerrainMistileExternalTerrainCompat.GetBlueprintProtectionRadius(20f, null, blueprint));
+    }
+
+    [TestMethod]
     public void EwdFallbackRejectsBiomeOverflowInsteadOfReusing128()
     {
         string directory = CreateTemporaryDirectory();
@@ -694,5 +767,22 @@ public sealed class TerrainMistileSpawnRulesTests
         public string paint = "";
         public float levelRadius = 0f;
         public float levelBorder = 0f;
+        public float exteriorRadius = 0f;
+        public float? paintRadius = null;
+        public float? paintBorder = null;
+        public string noBuild = "";
+    }
+
+    private sealed class ExternalBlueprintData
+    {
+        public float Radius;
+        public ExternalSnapshotData? TerrainHeight = null;
+        public ExternalSnapshotData? TerrainPaint = null;
+    }
+
+    private sealed class ExternalSnapshotData
+    {
+        public bool HasValues { get; set; } = true;
+        public float DistanceBetweenNodes = 1f;
     }
 }

@@ -220,8 +220,7 @@ internal static class TerrainMistileSystem
                 }
 
                 changedCells += changedOnHeightmap;
-                TerrainCompAccess.CommitReset(terrainComp, center, radius);
-                hmap.Poke(delayed: false);
+                TerrainCompAccess.CommitReset(terrainComp, center, radius, resetPaint);
             }
 
             if (changedCells > 0 && ClutterSystem.instance)
@@ -813,17 +812,17 @@ internal static class TerrainMistileSystem
 
         float radius = rule.BaseCheckRadius;
         float radiusSqr = radius * radius;
-        Vector2i minZone = ZoneSystem.GetZone(new Vector3(point.x - radius, point.y, point.z - radius));
-        Vector2i maxZone = ZoneSystem.GetZone(new Vector3(point.x + radius, point.y, point.z + radius));
+        Vector2s minZone = ZoneSystem.GetZone(new Vector3(point.x - radius, point.y, point.z - radius));
+        Vector2s maxZone = ZoneSystem.GetZone(new Vector3(point.x + radius, point.y, point.z + radius));
 
         for (int z = minZone.y; z <= maxZone.y; z++)
         {
             for (int x = minZone.x; x <= maxZone.x; x++)
             {
-                Vector2i zone = new(x, z);
+                Vector2s zone = new(x, z);
                 Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
-                float dx = Mathf.Max(Mathf.Abs(point.x - zoneCenter.x) - ZoneSystem.c_ZoneHalfSize, 0f);
-                float dz = Mathf.Max(Mathf.Abs(point.z - zoneCenter.z) - ZoneSystem.c_ZoneHalfSize, 0f);
+                float dx = Mathf.Max(Mathf.Abs(point.x - zoneCenter.x) - ZoneSystem.c_ZoneSizeHalf, 0f);
+                float dz = Mathf.Max(Mathf.Abs(point.z - zoneCenter.z) - ZoneSystem.c_ZoneSizeHalf, 0f);
                 if (dx * dx + dz * dz > radiusSqr)
                 {
                     continue;
@@ -839,7 +838,7 @@ internal static class TerrainMistileSystem
         return true;
     }
 
-    private static bool IsPlayerBaseZoneReady(Vector2i zone)
+    private static bool IsPlayerBaseZoneReady(Vector2s zone)
     {
         if (_playerBaseZoneReadinessFrame != Time.frameCount)
         {
@@ -858,7 +857,7 @@ internal static class TerrainMistileSystem
         return ready;
     }
 
-    private static bool IsPlayerBaseZoneReadyUncached(Vector2i zone)
+    private static bool IsPlayerBaseZoneReadyUncached(Vector2s zone)
     {
         if (!ZNetScene.instance ||
             !ZoneSystem.instance ||
@@ -870,7 +869,7 @@ internal static class TerrainMistileSystem
 
         TempPlayerBaseZoneObjects.Clear();
         // ZNetScene.IsAreaReady expands to a 3x3 area; only pending configured base pieces matter here.
-        ZDOMan.instance.FindSectorObjects(zone, 0, 0, TempPlayerBaseZoneObjects);
+        ZDOMan.instance.FindSectorObjects(zone, new SimulationDistance(0, 0), TempPlayerBaseZoneObjects);
         bool ready = true;
         foreach (ZDO zdo in TempPlayerBaseZoneObjects)
         {

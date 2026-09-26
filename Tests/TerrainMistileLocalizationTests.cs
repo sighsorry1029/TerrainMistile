@@ -8,6 +8,33 @@ namespace TerrainMistile.Tests;
 [TestClass]
 public sealed class TerrainMistileLocalizationTests
 {
+    [TestMethod]
+    public void PartialTranslationUsesEnglishFallbackAndPreservesUnrelatedGameWords()
+    {
+        Dictionary<string, string> target = new() { ["game_word"] = "Game" };
+        Dictionary<string, string> english = new() { ["name"] = "Name", ["hint"] = "Hint" };
+        Dictionary<string, string> korean = new() { ["name"] = "이름" };
+
+        TerrainMistileLocalization.ApplyTranslations(target, english, korean);
+
+        Assert.AreEqual("Game", target["game_word"]);
+        Assert.AreEqual("이름", target["name"]);
+        Assert.AreEqual("Hint", target["hint"]);
+        Assert.AreEqual(2, english.Count);
+    }
+
+    [TestMethod]
+    public void SwitchingToUnsupportedLanguageRestoresEnglishInsteadOfPreviousLanguage()
+    {
+        Dictionary<string, string> target = new();
+        Dictionary<string, string> english = new() { ["name"] = "Name" };
+        TerrainMistileLocalization.ApplyTranslations(target, english, new() { ["name"] = "이름" });
+
+        TerrainMistileLocalization.ApplyTranslations(target, english, null);
+
+        Assert.AreEqual("Name", target["name"]);
+    }
+
     private static readonly string[] ExpectedTokens =
     {
         "terrainmistile_creature_name",

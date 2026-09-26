@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using HarmonyLib;
-using Jotunn.Managers;
 using UnityEngine;
 
 namespace TerrainMistile;
@@ -270,7 +269,7 @@ internal static class TerrainMistileCompendium
         GameObject? prefab = ZNetScene.instance ? ZNetScene.instance.GetPrefab(prefabName) : null;
         if (!prefab)
         {
-            prefab = PrefabManager.Instance.GetPrefab(prefabName);
+            prefab = ObjectDB.instance ? ObjectDB.instance.GetItemPrefab(prefabName) : null;
         }
 
         Piece? piece = prefab ? prefab.GetComponent<Piece>() : null;

@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Jotunn.Managers;
+using HarmonyLib;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -11,75 +11,115 @@ internal static class TerrainMistilePrefab
     internal const string PrefabName = "TerrainMistile";
     internal const string EnforcerPrefabName = "TerrainMistileEnforcer";
     private const string SourcePrefabName = "Mistile";
-    private static bool _hooked;
-    private static bool _terrainMistileRegistered;
-    private static bool _enforcerRegistered;
+    private static ZNetScene? _registeredScene;
+    private static GameObject? _container;
+    private static Dictionary<int, GameObject>? _namedPrefabs;
     private static GameObject? _registeredPrefab;
     private static GameObject? _registeredEnforcerPrefab;
     private static readonly List<Material> RegisteredPrefabVisualMaterials = new();
     private static readonly List<Material> RegisteredEnforcerPrefabVisualMaterials = new();
 
-    internal static void RegisterPrefabHook()
+    [HarmonyPatch(typeof(ZNetScene), "Awake")]
+    private static class RegisterPrefabsPatch
     {
-        if (_hooked)
+        private static void Prefix(ZNetScene __instance, Dictionary<int, GameObject> ___m_namedPrefabs)
         {
+            RegisterPrefabs(__instance, ___m_namedPrefabs);
+        }
+    }
+
+    [HarmonyPatch(typeof(ZNetScene), "OnDestroy")]
+    private static class ReleasePrefabsPatch
+    {
+        private static void Prefix(ZNetScene __instance)
+        {
+            if (ReferenceEquals(_registeredScene, __instance))
+                ReleasePrefabs();
+        }
+    }
+
+    private static void RegisterPrefabs(ZNetScene scene, Dictionary<int, GameObject> namedPrefabs)
+    {
+        if (ReferenceEquals(_registeredScene, scene))
             return;
-        }
 
-        PrefabManager.OnVanillaPrefabsAvailable += CreateTerrainMistilePrefab;
-        _hooked = true;
+        ReleasePrefabs();
+        try
+        {
+            GameObject? source = null;
+            foreach (GameObject prefab in scene.m_prefabs)
+            {
+                if (!prefab) continue;
+                CheckNameConflict(prefab);
+                if (prefab.name == SourcePrefabName) source = prefab;
+            }
+            foreach (GameObject prefab in scene.m_nonNetViewPrefabs)
+                if (prefab) CheckNameConflict(prefab);
+
+            if (!source || namedPrefabs.ContainsKey(PrefabName.GetStableHashCode()) ||
+                namedPrefabs.ContainsKey(EnforcerPrefabName.GetStableHashCode()))
+                throw new InvalidOperationException("Mistile source is missing or a TerrainMistile prefab hash is already registered.");
+
+            _registeredScene = scene;
+            _namedPrefabs = namedPrefabs;
+            _container = new GameObject("TerrainMistile prefabs");
+            // Configure inactive templates before any Character/ZNetView/behaviour Awake can run.
+            _container.SetActive(false);
+            _container.transform.SetParent(scene.transform, false);
+            _registeredPrefab = CreateTerrainMistilePrefab(source!, PrefabName, false, RegisteredPrefabVisualMaterials);
+            _registeredEnforcerPrefab = CreateTerrainMistilePrefab(source!, EnforcerPrefabName, true, RegisteredEnforcerPrefabVisualMaterials);
+            // Vanilla Awake builds the network name map from these lists after this prefix.
+            scene.m_prefabs.Add(_registeredPrefab);
+            scene.m_prefabs.Add(_registeredEnforcerPrefab);
+            TerrainMistilePlugin.TerrainMistileLogger.LogInfo("Registered TerrainMistile and TerrainMistileEnforcer prefabs.");
+        }
+        catch (Exception exception)
+        {
+            ReleasePrefabs();
+            TerrainMistilePlugin.TerrainMistileLogger.LogError($"TerrainMistile prefab registration failed: {exception}");
+        }
     }
 
-    internal static void UnregisterPrefabHook()
+    private static void CheckNameConflict(GameObject prefab)
     {
-        if (!_hooked)
-        {
-            return;
-        }
-
-        PrefabManager.OnVanillaPrefabsAvailable -= CreateTerrainMistilePrefab;
-        _hooked = false;
+        int hash = prefab.name.GetStableHashCode();
+        if (hash == PrefabName.GetStableHashCode() || hash == EnforcerPrefabName.GetStableHashCode())
+            throw new InvalidOperationException($"Prefab '{prefab.name}' conflicts with a TerrainMistile prefab hash.");
     }
 
-    private static void CreateTerrainMistilePrefab()
+    internal static void ReleasePrefabs()
     {
-        if (!_terrainMistileRegistered &&
-            TryCreateTerrainMistilePrefab(
-                PrefabName,
-                enforcer: false,
-                RegisteredPrefabVisualMaterials,
-                out GameObject? prefab))
-        {
-            _registeredPrefab = prefab;
-            _terrainMistileRegistered = true;
-        }
-
-        if (!_enforcerRegistered &&
-            TryCreateTerrainMistilePrefab(
-                EnforcerPrefabName,
-                enforcer: true,
-                RegisteredEnforcerPrefabVisualMaterials,
-                out GameObject? enforcerPrefab))
-        {
-            _registeredEnforcerPrefab = enforcerPrefab;
-            _enforcerRegistered = true;
-        }
+        RemovePrefab(_registeredPrefab);
+        RemovePrefab(_registeredEnforcerPrefab);
+        _registeredPrefab = null;
+        _registeredEnforcerPrefab = null;
+        _registeredScene = null;
+        _namedPrefabs = null;
+        if (_container) Object.Destroy(_container);
+        _container = null;
+        ReleaseVisualMaterials(RegisteredPrefabVisualMaterials);
+        ReleaseVisualMaterials(RegisteredEnforcerPrefabVisualMaterials);
     }
 
-    private static bool TryCreateTerrainMistilePrefab(
+    private static void RemovePrefab(GameObject? prefab)
+    {
+        if (ReferenceEquals(prefab, null)) return;
+        if (_registeredScene) _registeredScene!.m_prefabs.Remove(prefab);
+        if (prefab && _namedPrefabs != null &&
+            _namedPrefabs.TryGetValue(prefab!.name.GetStableHashCode(), out GameObject registered) &&
+            ReferenceEquals(registered, prefab))
+            _namedPrefabs.Remove(prefab.name.GetStableHashCode());
+    }
+
+    private static GameObject CreateTerrainMistilePrefab(
+        GameObject source,
         string prefabName,
         bool enforcer,
-        List<Material> registeredVisualMaterials,
-        out GameObject? registeredPrefab)
+        List<Material> registeredVisualMaterials)
     {
-        registeredPrefab = null;
-        GameObject prefab = PrefabManager.Instance.CreateClonedPrefab(prefabName, SourcePrefabName);
-        if (!prefab)
-        {
-            TerrainMistilePlugin.TerrainMistileLogger.LogError(
-                $"Could not clone vanilla prefab '{SourcePrefabName}' as '{prefabName}'.");
-            return false;
-        }
+        GameObject prefab = Object.Instantiate(source, _container!.transform);
+        prefab.name = prefabName;
+        prefab.SetActive(true);
 
         Character character = prefab.GetComponent<Character>();
         if (character)
@@ -121,11 +161,7 @@ internal static class TerrainMistilePrefab
 
         MakeCollidersNonBlocking(prefab);
         ApplyVisuals(prefab, TerrainMistileSpawnRules.DefaultVisualColor, registeredVisualMaterials);
-        PrefabManager.Instance.AddPrefab(prefab);
-        registeredPrefab = prefab;
-        TerrainMistilePlugin.TerrainMistileLogger.LogInfo(
-            $"Registered '{prefabName}' prefab from '{SourcePrefabName}'.");
-        return true;
+        return prefab;
     }
 
     internal static void RefreshRegisteredPrefabVisuals()

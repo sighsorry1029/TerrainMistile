@@ -6,8 +6,7 @@ using System.Reflection;
 using System.Text;
 using BepInEx;
 using BepInEx.Logging;
-using Jotunn.Entities;
-using Jotunn.Managers;
+using HarmonyLib;
 using YamlDotNet.Serialization;
 
 namespace TerrainMistile;
@@ -16,16 +15,18 @@ internal static class TerrainMistileLocalization
 {
     private const string FileExtension = ".yml";
     private static readonly string FilePrefix = TerrainMistilePlugin.ModName + ".";
+    private static readonly Dictionary<string, Dictionary<string, string>> Languages = new(StringComparer.Ordinal);
+    private static readonly char[] InvalidTokenCharacters = " (){}[]+-!?/\\&%,.:-=<>\n".ToCharArray();
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .IgnoreFields()
         .Build();
 
     internal static void Load(ManualLogSource logger)
     {
-        CustomLocalization localization = LocalizationManager.Instance.GetLocalization();
-        bool embeddedEnglishLoaded = TryLoadEmbeddedYaml(localization, "English", logger);
-        _ = TryLoadEmbeddedYaml(localization, "Korean", logger);
-        LoadExternalYamlFiles(localization, logger);
+        Languages.Clear();
+        bool embeddedEnglishLoaded = TryLoadEmbeddedYaml("English", logger);
+        _ = TryLoadEmbeddedYaml("Korean", logger);
+        LoadExternalYamlFiles(logger);
 
         if (!embeddedEnglishLoaded)
         {
@@ -35,8 +36,68 @@ internal static class TerrainMistileLocalization
         }
     }
 
+    // The game's AddWord is private. Resolve its backing table/cache once, never per frame.
+    private static class GameAccess
+    {
+        internal static readonly AccessTools.FieldRef<Localization> Instance =
+            AccessTools.StaticFieldRefAccess<Localization>(AccessTools.Field(typeof(Localization), "m_instance"));
+        internal static readonly AccessTools.FieldRef<Localization, Dictionary<string, string>> Translations =
+            AccessTools.FieldRefAccess<Localization, Dictionary<string, string>>("m_translations");
+        internal static readonly AccessTools.FieldRef<Localization, LRUCache<string>> Cache =
+            AccessTools.FieldRefAccess<Localization, LRUCache<string>>("m_cache");
+    }
+
+    internal static void ApplyToCurrentLanguage()
+    {
+        // Do not force UI/platform initialization from BepInEx Awake (including on servers).
+        // A later vanilla constructor receives translations through the language hooks.
+        Localization? localization = GameAccess.Instance();
+        if (localization == null) return;
+        AddLanguages(localization.GetLanguages());
+        ApplyLanguage(GameAccess.Translations(localization), localization.GetSelectedLanguage());
+        GameAccess.Cache(localization).EvictAll();
+    }
+
+    [HarmonyPatch(typeof(Localization), nameof(Localization.SetupLanguage), typeof(string))]
+    private static class SetupLanguagePatch
+    {
+        private static void Postfix(string language, Dictionary<string, string> ___m_translations,
+            LRUCache<string> ___m_cache)
+        {
+            ApplyLanguage(___m_translations, language);
+            ___m_cache.EvictAll();
+        }
+    }
+
+    [HarmonyPatch(typeof(Localization), "LoadLanguages")]
+    private static class LoadLanguagesPatch
+    {
+        private static void Postfix(List<string> __result) => AddLanguages(__result);
+    }
+
+    private static void AddLanguages(List<string> languages)
+    {
+        foreach (string language in Languages.Keys)
+            if (!languages.Contains(language)) languages.Add(language);
+    }
+
+    private static void ApplyLanguage(Dictionary<string, string> target, string language)
+    {
+        Languages.TryGetValue("English", out Dictionary<string, string>? english);
+        Languages.TryGetValue(language, out Dictionary<string, string>? selected);
+        ApplyTranslations(target, english, selected);
+    }
+
+    internal static void ApplyTranslations(Dictionary<string, string> target,
+        Dictionary<string, string>? english, Dictionary<string, string>? selected)
+    {
+        if (english != null)
+            foreach (var entry in english) target[entry.Key] = entry.Value;
+        if (selected != null && !ReferenceEquals(selected, english))
+            foreach (var entry in selected) target[entry.Key] = entry.Value;
+    }
+
     private static bool TryLoadEmbeddedYaml(
-        CustomLocalization localization,
         string language,
         ManualLogSource logger)
     {
@@ -64,7 +125,6 @@ internal static class TerrainMistileLocalization
 
             using StreamReader reader = new(stream, Encoding.UTF8, true);
             return TryAddYamlTranslations(
-                localization,
                 language,
                 reader.ReadToEnd(),
                 $"embedded {TerrainMistilePlugin.ModName}.{language}{FileExtension}",
@@ -79,7 +139,6 @@ internal static class TerrainMistileLocalization
     }
 
     private static void LoadExternalYamlFiles(
-        CustomLocalization localization,
         ManualLogSource logger)
     {
         string rootPath = Paths.BepInExRootPath;
@@ -132,7 +191,7 @@ internal static class TerrainMistileLocalization
                     $"Its duplicate tokens override values loaded from {previousFile}.");
             }
 
-            if (!TryAddYamlTranslations(localization, language, yaml, file, logger))
+            if (!TryAddYamlTranslations(language, yaml, file, logger))
             {
                 continue;
             }
@@ -142,7 +201,6 @@ internal static class TerrainMistileLocalization
     }
 
     private static bool TryAddYamlTranslations(
-        CustomLocalization localization,
         string language,
         string yaml,
         string source,
@@ -156,7 +214,19 @@ internal static class TerrainMistileLocalization
 
         try
         {
-            localization.AddTranslation(language, translations);
+            if (!Languages.TryGetValue(language, out Dictionary<string, string> target))
+                Languages.Add(language, target = new Dictionary<string, string>(StringComparer.Ordinal));
+            foreach (var entry in translations)
+            {
+                // Preserve the former loader's token normalization and rejection policy.
+                string token = entry.Key.TrimStart('$');
+                if (token.Length == 0 || token.IndexOfAny(InvalidTokenCharacters) >= 0)
+                {
+                    logger.LogWarning($"Ignoring invalid localization token '{entry.Key}' from {source}.");
+                    continue;
+                }
+                target[token] = entry.Value;
+            }
             logger.LogInfo(
                 $"Loaded {translations.Count} {language} localization entries from {source}.");
             return true;

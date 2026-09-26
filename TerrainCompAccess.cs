@@ -8,7 +8,7 @@ namespace TerrainMistile;
 
 internal static class TerrainCompAccess
 {
-    private delegate void SaveTerrainComp(TerrainComp terrainComp);
+    private delegate void SaveTerrainComp(TerrainComp terrainComp, bool paintOnly);
 
     private static AccessTools.FieldRef<List<TerrainComp>> _instances = null!;
     private static AccessTools.FieldRef<TerrainComp, Heightmap> _heightmap = null!;
@@ -112,13 +112,22 @@ internal static class TerrainCompAccess
         return true;
     }
 
-    internal static void CommitReset(TerrainComp terrainComp, Vector3 center, float radius)
+    internal static void CommitReset(TerrainComp terrainComp, Vector3 center, float radius, bool resetPaint)
     {
         ref int operations = ref _operations(terrainComp);
         operations++;
         _lastOperationPoint(terrainComp) = center;
         _lastOperationRadius(terrainComp) = radius;
-        _save(terrainComp);
+        // Resets can change height as well as paint. Do not use the paint hash shortcut.
+        _save(terrainComp, false);
+        Heightmap heightmap = _heightmap(terrainComp);
+        heightmap.Poke(delayed: 0, paintOnly: false);
+        if (resetPaint)
+        {
+            // 1.0.7 batches later paint operations against this cache, including unmodified cells.
+            // Rebuild it from the restored world/location mask instead of leaving cleared black cells.
+            _paintMask(terrainComp) = heightmap.GetPaintMask().GetPixels();
+        }
     }
 
     private static Bindings ResolveBindings()
@@ -154,10 +163,10 @@ internal static class TerrainCompAccess
                                 BindingFlags.Instance |
                                 BindingFlags.DeclaredOnly,
                                 binder: null,
-                                types: Type.EmptyTypes,
+                                types: new[] { typeof(bool) },
                                 modifiers: null) ??
                             throw new MissingMethodException(typeof(TerrainComp).FullName, name);
-        if (method.IsStatic || method.ReturnType != typeof(void) || method.GetParameters().Length != 0)
+        if (method.IsStatic || method.ReturnType != typeof(void))
         {
             throw new InvalidOperationException(
                 $"{typeof(TerrainComp).FullName}.{name} no longer matches the expected method contract.");

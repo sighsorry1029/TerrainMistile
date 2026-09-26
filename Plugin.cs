@@ -5,17 +5,15 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using Jotunn;
 using ServerSync;
 
 namespace TerrainMistile;
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
-[BepInDependency(Main.ModGuid)]
 public class TerrainMistilePlugin : BaseUnityPlugin
 {
     internal const string ModName = "TerrainMistile";
-    internal const string ModVersion = "1.0.9";
+    internal const string ModVersion = "1.1.0";
     internal const string Author = "sighsorry";
     internal const string DisplayNameToken = "$terrainmistile_creature_name";
     internal const string EnforcerDisplayNameToken = "$terrainmistile_enforcer_name";
@@ -27,6 +25,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     private static readonly string ConfigFileFullPath = Path.Combine(Paths.ConfigPath, ConfigFileName);
     private static readonly string SpawnRulesFileFullPath = Path.Combine(Paths.ConfigPath, SpawnRulesFileName);
     private readonly Harmony _harmony = new(ModGUID);
+    private bool _initialized;
     public static readonly ManualLogSource TerrainMistileLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     private static readonly ConfigSync ConfigSync = new(ModGUID)
     {
@@ -75,10 +74,9 @@ public class TerrainMistilePlugin : BaseUnityPlugin
             ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
             ApplySpawnRulesYaml(File.ReadAllText(SpawnRulesFileFullPath), "local fallback");
 
-            TerrainMistilePrefab.RegisterPrefabHook();
-
             Assembly assembly = Assembly.GetExecutingAssembly();
             _harmony.PatchAll(assembly);
+            TerrainMistileLocalization.ApplyToCurrentLanguage();
             TerrainMistileExternalTerrainCompat.Initialize(TerrainMistileLogger, _harmony);
             SetupWatcher();
             if (ConfigSync.IsSourceOfTruth)
@@ -88,6 +86,12 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
             Config.Save();
             _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
+            _initialized = true;
+        }
+        catch
+        {
+            Cleanup();
+            throw;
         }
         finally
         {
@@ -99,13 +103,32 @@ public class TerrainMistilePlugin : BaseUnityPlugin
     {
         try
         {
-            TerrainMistilePrefab.UnregisterPrefabHook();
+            if (_initialized) ConfigPersistence.Save(Config);
+        }
+        finally
+        {
+            Cleanup();
+        }
+    }
+
+    private void Cleanup()
+    {
+        _initialized = false;
+        try
+        {
             if (SpawnRulesYaml != null)
             {
                 SpawnRulesYaml.ValueChanged -= OnSyncedSpawnRulesYamlChanged;
             }
             ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
-            ConfigPersistence.Save(Config);
+            try
+            {
+                _harmony.UnpatchSelf();
+            }
+            finally
+            {
+                TerrainMistilePrefab.ReleasePrefabs();
+            }
         }
         finally
         {
@@ -122,6 +145,7 @@ public class TerrainMistilePlugin : BaseUnityPlugin
 
     private void Update()
     {
+        if (!_initialized) return;
         TerrainMistileSystem.UpdateResetEffectRpcRegistration();
         TerrainMistileSystem.UpdateProtectedTerrainAreaSync();
         TerrainMistileExternalTerrainCompat.Update();

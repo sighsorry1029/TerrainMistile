@@ -2,8 +2,6 @@
 
 Spawns configurable TerrainMistiles from changed terrain. They seek the edit, detonate, and reset player-made height/paint changes while preserving world/location terrain. Tune biome chance, interval, radius, health, color, and base protection.
 
-This source targets **Valheim 1.0.16** and **BepInExPack Valheim 5.4.2351**.
-
 ![](https://i.ibb.co/21mZ5f8f/meadowexample.gif) <br>
 TerrainMistiles try to reset changed terrain, but players can stop them by destroying them before impact.
 
@@ -25,6 +23,7 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - Successful resets prompt nearby players to check the localized TerrainMistile Compendium entry, at most once every 60 seconds.
 - Reset clears player-style `TerrainComp` height and paint deltas in `resetRadius`.
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.
+- Expand World Data 1.73 blueprint terrain snapshots are protected using their loaded bounds and sample spacing, including when the location's `exteriorRadius` is smaller than its saved terrain.
 - TerrainMistiles use nonblocking colliders so terrain and pieces do not trap them before impact.
 
 ## TerrainMistileEnforcer
@@ -63,7 +62,7 @@ DropNSpawn event `spawns` replace that event's entire spawn list, so keep any ex
 
 ## Localization
 
-English and Korean localization are embedded in `TerrainMistile.dll`, so the mod keeps its built-in translations when only the DLL is installed. TerrainMistile also loads optional flat YAML files named `TerrainMistile.<Language>.yml` from anywhere under `BepInEx` when the plugin starts. External files add languages or override embedded values. The language must use its exact Valheim/Jötunn name and begin with a capital letter.
+English and Korean localization are embedded in `TerrainMistile.dll`, so the mod keeps its built-in translations when only the DLL is installed. TerrainMistile also loads optional flat YAML files named `TerrainMistile.<Language>.yml` from anywhere under `BepInEx` when the plugin starts. External files add languages or override embedded values. The language must use its exact Valheim name and begin with a capital letter.
 
 For example, a modpack can add French localization without changing the TerrainMistile plugin folder:
 
@@ -187,20 +186,3 @@ Examples:
 - Increase `playerSearchRadius` if changed terrain should stay active from farther away.
 - Increase `resetRadius` for tall or wide terrain edits that need a larger reset area.
 - Raise `playerBaseValue` in dangerous biomes if simple one-piece bases should not fully suppress spawns.
-
-## Development
-
-Copy `environment.props.example` to `environment.props` to select a specific Valheim installation or when automatic detection fails, then set `ValheimGamePath`.
-
-`TerrainMistilePlugin.ModVersion` is the release version source. On Windows, a Release build updates the source Thunderstore manifest when needed, then creates both Thunderstore and Nexus archives:
-
-```powershell
-dotnet test .\TerrainMistile.sln -c Debug
-dotnet build .\TerrainMistile.csproj -c Release
-dotnet build .\TerrainMistile.csproj -c Release -p:DeployToGame=true
-dotnet build .\TerrainMistile.csproj -c Release -p:PackageMod=false
-dotnet test .\TerrainMistile.sln -c Release -p:PackageMod=false
-```
-
-`DeployToGame` copies the merged DLL to the configured BepInEx plugins directory. Windows Release packaging is enabled by default; set `PackageMod=false` when only the DLL is needed.
-Deployment and packaging remain properties on the normal `Build` entry point, and internal build-action targets reject direct invocation.

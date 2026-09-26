@@ -2,7 +2,8 @@
   <Import Project="..\environment.props" Condition="Exists('..\environment.props')" />
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <!-- Original game DLLs use default interface methods, unsupported by the desktop CLR 4.8. -->
+    <TargetFramework>net9.0</TargetFramework>
     <LangVersion>10.0</LangVersion>
     <Nullable>enable</Nullable>
     <UseVSTest>true</UseVSTest>
@@ -49,7 +50,6 @@
       <HintPath>$(CorlibPath)\UnityEngine.CoreModule.dll</HintPath>
       <Private>true</Private>
     </Reference>
-    <None Include="$(CorlibPath)\netstandard.dll" Link="netstandard.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\Translations\TerrainMistile.*.yml"
           Link="Translations\%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
@@ -60,6 +60,5 @@
     <Error Condition="!Exists('$(CorlibPath)\assembly_guiutils.dll')" Text="assembly_guiutils.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
     <Error Condition="!Exists('$(CorlibPath)\assembly_utils.dll')" Text="assembly_utils.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
     <Error Condition="!Exists('$(CorlibPath)\UnityEngine.CoreModule.dll')" Text="UnityEngine.CoreModule.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
-    <Error Condition="!Exists('$(CorlibPath)\netstandard.dll')" Text="Valheim's netstandard.dll was not found. Set ValheimGamePath in environment.props or pass GamePath on the command line." />
   </Target>
 </Project>

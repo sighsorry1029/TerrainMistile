@@ -18,6 +18,8 @@ internal static class TerrainMistileExternalTerrainCompat
     private const string ExpandWorldDataLocationYamlTypeName = "ExpandWorldData.LocationYaml";
     private const string ExpandWorldDataLocationExtraTypeName = "ExpandWorldData.LocationExtra";
     private const string ExpandWorldDataBlueprintManagerTypeName = "ExpandWorldData.BlueprintManager";
+    private const string ExpandWorldDataBlueprintTypeName = "ExpandWorldData.Blueprint";
+    private const string ExpandWorldDataTerrainTypeName = "ExpandWorldData.Terrain";
     private const string ExpandWorldDataNoBuildManagerTypeName = "ExpandWorldData.NoBuildManager";
     private const string ExpandWorldDataBiomeManagerTypeName = "ExpandWorldData.BiomeManager";
     private const string BlueprintProtectedSourcePrefix = "Expand World Data blueprint terrain";
@@ -27,9 +29,11 @@ internal static class TerrainMistileExternalTerrainCompat
 
     private static readonly Dictionary<string, Type> LoadedTypes = new(StringComparer.Ordinal);
     private static readonly Dictionary<Type, Dictionary<string, FieldInfo?>> FieldsByType = new();
+    private static readonly Dictionary<Type, PropertyInfo> SnapshotHasValuesProperties = new();
     private static ManualLogSource? _logger;
     private static Harmony? _harmony;
     private static bool _terrainPatched;
+    private static bool _blueprintTerrainPatched;
     private static bool _protectionSyncPatched;
     private static bool _biomeMappingRefreshPatched;
     private static bool _biomeNamesFromFilePatched;
@@ -42,6 +46,7 @@ internal static class TerrainMistileExternalTerrainCompat
     private static float _nextPatchAttemptTime;
     private static MethodInfo? _tryGetLocationYamlMethod;
     private static MethodInfo? _isBlueprintPrefabMethod;
+    private static MethodInfo? _tryGetBlueprintMethod;
 
     public static void Initialize(ManualLogSource logger, Harmony harmony)
     {
@@ -54,7 +59,7 @@ internal static class TerrainMistileExternalTerrainCompat
 
     public static void Update()
     {
-        if ((_terrainPatched && _protectionSyncPatched && _biomeMappingRefreshPatched) ||
+        if ((_terrainPatched && _blueprintTerrainPatched && _protectionSyncPatched && _biomeMappingRefreshPatched) ||
             _patchAttempts >= MaxPatchAttempts ||
             Time.time < _nextPatchAttemptTime)
         {
@@ -97,6 +102,7 @@ internal static class TerrainMistileExternalTerrainCompat
 
         _patchAttempts++;
         TryPatchTerrainHandler();
+        TryPatchBlueprintTerrainHandler();
         TryPatchBlueprintProtectionSync();
         TryPatchBiomeMappingRefresh();
         return true;
@@ -162,6 +168,35 @@ internal static class TerrainMistileExternalTerrainCompat
         }
 
         _logger?.LogInfo("Expand World Data blueprint terrain protection initialized.");
+    }
+
+    private static void TryPatchBlueprintTerrainHandler()
+    {
+        if (_blueprintTerrainPatched || _harmony == null)
+        {
+            return;
+        }
+
+        Type? terrainType = FindLoadedType(ExpandWorldDataTerrainTypeName);
+        Type? blueprintType = FindLoadedType(ExpandWorldDataBlueprintTypeName);
+        if (terrainType == null || blueprintType == null)
+        {
+            return;
+        }
+
+        MethodInfo? target = AccessTools.Method(
+            terrainType,
+            "ApplyBlueprint",
+            new[] { blueprintType, typeof(Vector3), typeof(Quaternion), typeof(ZoneSystem.SpawnMode), typeof(List<GameObject>) });
+        if (target == null)
+        {
+            return;
+        }
+
+        _harmony.Patch(target, prefix: new HarmonyMethod(
+            typeof(TerrainMistileExternalTerrainCompat), nameof(ApplyBlueprintPrefix)));
+        _blueprintTerrainPatched = true;
+        _logger?.LogInfo("Expand World Data blueprint terrain snapshot protection initialized.");
     }
 
     private static void TryPatchBiomeMappingRefresh()
@@ -301,11 +336,42 @@ internal static class TerrainMistileExternalTerrainCompat
             TerrainMistileSystem.RegisterExternalTerrainIgnoreArea(pos, ignoreRadius, "Expand World Data location terrain", TerrainMistileSystem.LocationTerrainIgnoreDuration);
         }
 
-        float noBuildRadius = GetNoBuildRadius(data, Mathf.Max(GetFloat(data, "exteriorRadius"), radius));
-        float protectedRadius = Mathf.Max(ignoreRadius, radius, GetFloat(data, "exteriorRadius"), noBuildRadius) + TerrainMistileSystem.LocationTerrainProtectionPadding;
-        if (isBlueprint)
+        // EWD's isBlueprint argument controls default leveling, not blueprint identity.
+        try
         {
-            TerrainMistileSystem.RegisterProtectedTerrainArea(pos, protectedRadius, $"{BlueprintProtectedSourcePrefix} {prefab}");
+            if (TryGetLoadedBlueprint(prefab, out object? blueprint) && blueprint != null)
+            {
+                float protectedRadius = GetBlueprintProtectionRadius(radius, data, blueprint);
+                TerrainMistileSystem.RegisterProtectedTerrainArea(pos, protectedRadius, $"{BlueprintProtectedSourcePrefix} {prefab}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning($"Expand World Data blueprint terrain protection failed: {ex.Message}");
+        }
+    }
+
+    private static void ApplyBlueprintPrefix(object blueprint, Vector3 position)
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer())
+        {
+            return;
+        }
+
+        try
+        {
+            float radius = GetBlueprintSnapshotRadius(blueprint);
+            if (radius > 0f)
+            {
+                TerrainMistileSystem.RegisterProtectedTerrainArea(
+                    position,
+                    radius + TerrainMistileSystem.LocationTerrainProtectionPadding,
+                    $"{BlueprintProtectedSourcePrefix} {GetString(blueprint, "Name")}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning($"Expand World Data blueprint terrain snapshot protection failed: {ex.Message}");
         }
     }
 
@@ -338,12 +404,12 @@ internal static class TerrainMistileExternalTerrainCompat
                     continue;
                 }
 
-                if (!TryIsBlueprintPrefab(prefab, out bool isBlueprint))
+                if (!TryGetLoadedBlueprint(prefab, out object? blueprint))
                 {
                     return;
                 }
 
-                if (!isBlueprint)
+                if (blueprint == null)
                 {
                     continue;
                 }
@@ -355,9 +421,8 @@ internal static class TerrainMistileExternalTerrainCompat
                 }
 
                 object? data = foundData ? locationYaml : null;
-                float terrainRadius = data == null ? 0f : GetTerrainRadius(locationInstance.m_location.m_exteriorRadius, isBlueprint: true, data);
-                float noBuildRadius = data == null ? 0f : GetNoBuildRadius(data, locationInstance.m_location.m_exteriorRadius);
-                float protectedRadius = Mathf.Max(terrainRadius, locationInstance.m_location.m_exteriorRadius, noBuildRadius) + TerrainMistileSystem.LocationTerrainProtectionPadding;
+                float protectedRadius = GetBlueprintProtectionRadius(
+                    locationInstance.m_location.m_exteriorRadius, data, blueprint);
 
                 protectedAreas.Add(new TerrainMistileSystem.ProtectedTerrainAreaData(
                     locationInstance.m_position,
@@ -398,23 +463,35 @@ internal static class TerrainMistileExternalTerrainCompat
         }
     }
 
-    private static bool TryIsBlueprintPrefab(string prefab, out bool isBlueprint)
+    private static bool TryGetLoadedBlueprint(string prefab, out object? blueprint)
     {
-        isBlueprint = false;
-        MethodInfo? method = _isBlueprintPrefabMethod;
-        if (method == null)
+        blueprint = null;
+        if (!EnsureBlueprintReflectionMethods())
         {
             return false;
         }
 
         try
         {
-            isBlueprint = method.Invoke(null, new object[] { prefab }) as bool? == true;
+            if (_isBlueprintPrefabMethod!.Invoke(null, new object[] { prefab }) as bool? != true)
+            {
+                return true;
+            }
+
+            // TryGet can load files; Has above limits this lookup to already-loaded blueprints.
+            object?[] args = { prefab, null };
+            if (_tryGetBlueprintMethod!.Invoke(null, args) as bool? != true || args[1] == null)
+            {
+                return false;
+            }
+
+            blueprint = args[1];
             return true;
         }
         catch (Exception ex)
         {
             _isBlueprintPrefabMethod = null;
+            _tryGetBlueprintMethod = null;
             _logger?.LogWarning($"Expand World Data blueprint lookup failed: {ex.Message}");
             return false;
         }
@@ -424,13 +501,14 @@ internal static class TerrainMistileExternalTerrainCompat
     {
         if (_blueprintReflectionResolved)
         {
-            return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null;
+            return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null && _tryGetBlueprintMethod != null;
         }
 
         Type? locationExtraType = FindLoadedType(ExpandWorldDataLocationExtraTypeName);
         Type? locationYamlType = FindLoadedType(ExpandWorldDataLocationYamlTypeName);
         Type? blueprintManagerType = FindLoadedType(ExpandWorldDataBlueprintManagerTypeName);
-        if (locationExtraType == null || locationYamlType == null || blueprintManagerType == null)
+        Type? blueprintType = FindLoadedType(ExpandWorldDataBlueprintTypeName);
+        if (locationExtraType == null || locationYamlType == null || blueprintManagerType == null || blueprintType == null)
         {
             return false;
         }
@@ -440,8 +518,74 @@ internal static class TerrainMistileExternalTerrainCompat
             "TryGetData",
             new[] { typeof(ZoneSystem.ZoneLocation), locationYamlType.MakeByRefType() });
         _isBlueprintPrefabMethod = AccessTools.Method(blueprintManagerType, "Has", new[] { typeof(string) });
+        _tryGetBlueprintMethod = AccessTools.Method(
+            blueprintManagerType, "TryGet", new[] { typeof(string), blueprintType.MakeByRefType() });
         _blueprintReflectionResolved = true;
-        return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null;
+        return _tryGetLocationYamlMethod != null && _isBlueprintPrefabMethod != null && _tryGetBlueprintMethod != null;
+    }
+
+    internal static float GetBlueprintProtectionRadius(float exteriorRadius, object? data, object blueprint)
+    {
+        float radius = Mathf.Max(exteriorRadius, GetBlueprintSnapshotRadius(blueprint));
+        if (data != null)
+        {
+            float locationRadius = Mathf.Max(exteriorRadius, GetFloat(data, "exteriorRadius"));
+            bool defaultLevel = GetSnapshotNodeSpacing(GetField(blueprint, "TerrainHeight")?.GetValue(blueprint)) == 0f;
+            radius = Mathf.Max(radius, locationRadius, GetTerrainRadius(exteriorRadius, defaultLevel, data), GetNoBuildRadius(data, locationRadius));
+        }
+
+        return radius + TerrainMistileSystem.LocationTerrainProtectionPadding;
+    }
+
+    internal static float GetBlueprintSnapshotRadius(object blueprint)
+    {
+        float nodeSpacing = Mathf.Max(
+            GetSnapshotNodeSpacing(GetField(blueprint, "TerrainHeight")?.GetValue(blueprint)),
+            GetSnapshotNodeSpacing(GetField(blueprint, "TerrainPaint")?.GetValue(blueprint)));
+        if (nodeSpacing == 0f)
+        {
+            return 0f;
+        }
+
+        // EWD computes Radius from centered object and terrain bounds when loading the blueprint.
+        // Include sample spacing because nearest-node sampling also affects terrain beyond the last node.
+        if (GetField(blueprint, "Radius")?.GetValue(blueprint) is not float radius ||
+            float.IsNaN(radius) || float.IsInfinity(radius) || radius < 0f ||
+            float.IsInfinity(radius + nodeSpacing))
+        {
+            throw new InvalidOperationException("Invalid Expand World Data blueprint terrain radius.");
+        }
+
+        return radius + nodeSpacing;
+    }
+
+    private static float GetSnapshotNodeSpacing(object? snapshot)
+    {
+        if (snapshot == null)
+        {
+            return 0f;
+        }
+
+        Type type = snapshot.GetType();
+        if (!SnapshotHasValuesProperties.TryGetValue(type, out PropertyInfo property))
+        {
+            property = type.GetProperty("HasValues", BindingFlags.Instance | BindingFlags.Public)
+                       ?? throw new MissingMemberException(type.FullName, "HasValues");
+            SnapshotHasValuesProperties[type] = property;
+        }
+
+        if (property.GetValue(snapshot) is not true)
+        {
+            return 0f;
+        }
+
+        float spacing = GetFloat(snapshot, "DistanceBetweenNodes");
+        if (float.IsNaN(spacing) || float.IsInfinity(spacing) || spacing <= 0f)
+        {
+            throw new InvalidOperationException("Invalid Expand World Data terrain node spacing.");
+        }
+
+        return spacing;
     }
 
     internal static float GetTerrainRadius(float exteriorRadius, bool isBlueprint, object data)

@@ -12,7 +12,8 @@ namespace TerrainMistile;
     typeof(Vector3),
     typeof(Quaternion),
     typeof(ZoneSystem.SpawnMode),
-    typeof(List<GameObject>))]
+    typeof(List<GameObject>),
+    typeof(bool))]
 internal static class ZoneSystemSpawnLocationPatch
 {
     private static void Prefix(ZoneSystem.ZoneLocation location, Vector3 pos)
