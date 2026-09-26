@@ -13,6 +13,15 @@ public sealed class TerrainMistileSpawnRulesTests
     private const float Tolerance = 0.0001f;
 
     [TestMethod]
+    public void BuildUsesSupportedValheimVersion()
+    {
+        Assert.AreEqual(
+            "1.0.16",
+            global::Version.CurrentVersion.ToString(),
+            "Run compatibility tests against the original Valheim 1.0.16 client or dedicated server DLLs.");
+    }
+
+    [TestMethod]
     public void BuildUsesRuntimeGameAssemblies()
     {
         foreach (string assemblyName in new[] { "assembly_valheim", "assembly_guiutils", "assembly_utils" })

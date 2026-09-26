@@ -2,6 +2,8 @@
 
 Spawns configurable TerrainMistiles from changed terrain. They seek the edit, detonate, and reset player-made height/paint changes while preserving world/location terrain. Tune biome chance, interval, radius, health, color, and base protection.
 
+This source targets **Valheim 1.0.16** and **BepInExPack Valheim 5.4.2351**.
+
 ![](https://i.ibb.co/21mZ5f8f/meadowexample.gif) <br>
 TerrainMistiles try to reset changed terrain, but players can stop them by destroying them before impact.
 
