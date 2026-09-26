@@ -322,6 +322,90 @@ public sealed class TerrainMistileSpawnRulesTests
     }
 
     [TestMethod]
+    public void NormalizedFieldAliasesKeepLastValidNumberButLastTextValue()
+    {
+        const string yaml =
+            "defaults:\n" +
+            "  interval: 90\n" +
+            "  spawnRadius: 10~20\n" +
+            "  visualColor: '#112233'\n" +
+            "Meadows:\n" +
+            "  interval: 120\n" +
+            "  INTERVAL: invalid\n" +
+            "  playerBaseValue: 3\n" +
+            "  player-base-value: 2147483648\n" +
+            "  perPlayerSpawn: false\n" +
+            "  per-player-spawn: invalid\n" +
+            "  spawnRadius: 24\n" +
+            "  spawn-radius: invalid\n" +
+            "  visualColor: '#FFFFFF'\n" +
+            "  visual-color: ' '\n";
+
+        TerrainMistileBiomeSpawnRule rule = Parse(yaml).BiomeRules[1];
+
+        Assert.AreEqual(120f, rule.Interval, Tolerance);
+        Assert.AreEqual(3, rule.PlayerBaseValue);
+        Assert.IsFalse(rule.PerPlayerSpawn);
+        Assert.AreEqual(10f, rule.SpawnRadiusMin, Tolerance);
+        Assert.AreEqual(20f, rule.SpawnRadiusMax, Tolerance);
+        AssertColor(rule, 0x11, 0x22, 0x33, 0xFF);
+    }
+
+    [TestMethod]
+    public void LastDefaultsBlockReplacesEarlierBlockBeforeBiomeInheritance()
+    {
+        ParsedRules parsed = Parse(
+            "Meadows:\n  health: 9\n" +
+            "defaults:\n  interval: 200\n  health: 5\n" +
+            "DEFAULTS:\n  health: 7\n" +
+            "BlackForest:\n");
+
+        Assert.AreEqual(60f, parsed.DefaultRule.Interval, Tolerance);
+        Assert.AreEqual(7f, parsed.DefaultRule.Health, Tolerance);
+        Assert.AreEqual(60f, parsed.BiomeRules[1].Interval, Tolerance);
+        Assert.AreEqual(9f, parsed.BiomeRules[1].Health, Tolerance);
+        AssertRulesEqual(parsed.DefaultRule, parsed.BiomeRules[8]);
+    }
+
+    [TestMethod]
+    [DataRow("null")]
+    [DataRow("[]")]
+    [DataRow("invalid")]
+    public void NonMappingBiomeRuleInheritsAllDefaultValues(string value)
+    {
+        ParsedRules parsed = Parse(
+            "defaults:\n  interval: 91\n  health: 13\n  visualColor: '#AABBCC'\n" +
+            "Meadows: " + value + "\n");
+
+        AssertRulesEqual(parsed.DefaultRule, parsed.BiomeRules[1]);
+    }
+
+    [TestMethod]
+    public void InvalidReloadPreservesPreviouslyAppliedRulesAndDerivedState()
+    {
+        Assert.IsTrue(TerrainMistileSpawnRules.LoadYamlText(
+            "defaults:\n  interval: 0\n  resetRadius: 5\n" +
+            "Meadows:\n  interval: 100\n  playerSearchRadius: 72\n  resetRadius: 13\n" +
+            "playerBasePrefabs: [bed, forge]\n", "reload test"));
+        try
+        {
+            TerrainMistileBiomeSpawnRule before = TerrainMistileSpawnRules.GetRule(1);
+            Assert.IsFalse(TerrainMistileSpawnRules.LoadYamlText("defaults: [", "invalid reload"));
+
+            AssertRulesEqual(before, TerrainMistileSpawnRules.GetRule(1));
+            Assert.IsTrue(TerrainMistileSpawnRules.HasEnabledRules);
+            Assert.AreEqual(72f, TerrainMistileSpawnRules.MaxPlayerSearchRadius, Tolerance);
+            Assert.AreEqual(13f, TerrainMistileSpawnRules.MaxResetRadius, Tolerance);
+            CollectionAssert.AreEquivalent(new[] { "bed", "forge" },
+                TerrainMistileSpawnRules.GetPlayerBasePrefabNamesSnapshot());
+        }
+        finally
+        {
+            Assert.IsTrue(TerrainMistileSpawnRules.LoadYamlText("", "restore built-in defaults"));
+        }
+    }
+
+    [TestMethod]
     public void NumericAndVanillaBiomeKeysResolveWithoutLoadingTheGame()
     {
         const string yaml =

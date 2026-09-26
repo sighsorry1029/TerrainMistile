@@ -211,13 +211,13 @@ internal static class TerrainMistileSpawnRules
             return true;
         }
 
-        TerrainMistileSpawnRuleValues? defaults = null;
+        object? defaults = null;
         foreach (KeyValuePair<object, object?> entry in file)
         {
             string key = GetYamlKey(entry.Key);
             if (key.Equals("defaults", StringComparison.OrdinalIgnoreCase))
             {
-                defaults = CreateValues(entry.Value);
+                defaults = entry.Value;
                 continue;
             }
 
@@ -258,7 +258,7 @@ internal static class TerrainMistileSpawnRules
                 continue;
             }
 
-            parsedRules[biome] = CreateRule(CreateValues(entry.Value), defaultRule);
+            parsedRules[biome] = CreateRule(entry.Value, defaultRule);
         }
 
         return true;
@@ -269,106 +269,114 @@ internal static class TerrainMistileSpawnRules
         return key?.ToString()?.Trim() ?? "";
     }
 
-    private static TerrainMistileSpawnRuleValues? CreateValues(object? value)
+    private static TerrainMistileBiomeSpawnRule CreateRule(object? value, TerrainMistileBiomeSpawnRule fallback)
     {
-        if (value == null)
-        {
-            return null;
-        }
-
         if (value is not IDictionary<object, object?> map)
         {
-            return null;
+            return fallback;
         }
 
-        TerrainMistileSpawnRuleValues values = new();
+        float interval = fallback.Interval;
+        float playerSearchRadius = fallback.PlayerSearchRadius;
+        float spawnChance = fallback.SpawnChance;
+        float maxDeformationSpawnChanceBonus = fallback.MaxDeformationSpawnChanceBonus;
+        int maxSpawn = fallback.MaxSpawn;
+        bool perPlayerSpawn = fallback.PerPlayerSpawn;
+        int playerBaseValue = fallback.PlayerBaseValue;
+        float baseCheckRadius = fallback.BaseCheckRadius;
+        string? spawnRadiusValue = null;
+        float spawnAltitude = fallback.SpawnAltitude;
+        float resetRadius = fallback.ResetRadius;
+        float health = fallback.Health;
+        string? visualColorValue = null;
+
         foreach (KeyValuePair<object, object?> entry in map)
         {
             string key = NormalizeFieldName(GetYamlKey(entry.Key));
             switch (key)
             {
                 case "interval":
-                    if (TryGetFloat(entry.Value, out float interval))
+                    if (TryGetFloat(entry.Value, out float parsedInterval))
                     {
-                        values.Interval = interval;
+                        interval = parsedInterval;
                     }
 
                     break;
                 case "playersearchradius":
-                    if (TryGetFloat(entry.Value, out float playerSearchRadius))
+                    if (TryGetFloat(entry.Value, out float parsedPlayerSearchRadius))
                     {
-                        values.PlayerSearchRadius = playerSearchRadius;
+                        playerSearchRadius = parsedPlayerSearchRadius;
                     }
 
                     break;
                 case "spawnchance":
-                    if (TryGetFloat(entry.Value, out float spawnChance))
+                    if (TryGetFloat(entry.Value, out float parsedSpawnChance))
                     {
-                        values.SpawnChance = spawnChance;
+                        spawnChance = parsedSpawnChance;
                     }
 
                     break;
                 case "maxdeformationspawnchancebonus":
-                    if (TryGetFloat(entry.Value, out float maxDeformationSpawnChanceBonus))
+                    if (TryGetFloat(entry.Value, out float parsedMaxDeformationSpawnChanceBonus))
                     {
-                        values.MaxDeformationSpawnChanceBonus = maxDeformationSpawnChanceBonus;
+                        maxDeformationSpawnChanceBonus = parsedMaxDeformationSpawnChanceBonus;
                     }
 
                     break;
                 case "maxspawn":
-                    if (TryGetInt(entry.Value, out int maxSpawn))
+                    if (TryGetInt(entry.Value, out int parsedMaxSpawn))
                     {
-                        values.MaxSpawn = maxSpawn;
+                        maxSpawn = parsedMaxSpawn;
                     }
 
                     break;
                 case "perplayerspawn":
-                    if (TryGetBool(entry.Value, out bool perPlayerSpawn))
+                    if (TryGetBool(entry.Value, out bool parsedPerPlayerSpawn))
                     {
-                        values.PerPlayerSpawn = perPlayerSpawn;
+                        perPlayerSpawn = parsedPerPlayerSpawn;
                     }
 
                     break;
                 case "playerbasevalue":
-                    if (TryGetInt(entry.Value, out int playerBaseValue))
+                    if (TryGetInt(entry.Value, out int parsedPlayerBaseValue))
                     {
-                        values.PlayerBaseValue = playerBaseValue;
+                        playerBaseValue = parsedPlayerBaseValue;
                     }
 
                     break;
                 case "basecheckradius":
-                    if (TryGetFloat(entry.Value, out float baseCheckRadius))
+                    if (TryGetFloat(entry.Value, out float parsedBaseCheckRadius))
                     {
-                        values.BaseCheckRadius = baseCheckRadius;
+                        baseCheckRadius = parsedBaseCheckRadius;
                     }
 
                     break;
                 case "spawnradius":
-                    values.SpawnRadius = entry.Value?.ToString();
+                    spawnRadiusValue = entry.Value?.ToString();
                     break;
                 case "spawnaltitude":
-                    if (TryGetFloat(entry.Value, out float spawnAltitude))
+                    if (TryGetFloat(entry.Value, out float parsedSpawnAltitude))
                     {
-                        values.SpawnAltitude = spawnAltitude;
+                        spawnAltitude = parsedSpawnAltitude;
                     }
 
                     break;
                 case "resetradius":
-                    if (TryGetFloat(entry.Value, out float resetRadius))
+                    if (TryGetFloat(entry.Value, out float parsedResetRadius))
                     {
-                        values.ResetRadius = resetRadius;
+                        resetRadius = parsedResetRadius;
                     }
 
                     break;
                 case "health":
-                    if (TryGetFloat(entry.Value, out float health))
+                    if (TryGetFloat(entry.Value, out float parsedHealth))
                     {
-                        values.Health = health;
+                        health = parsedHealth;
                     }
 
                     break;
                 case "visualcolor":
-                    values.VisualColor = entry.Value?.ToString();
+                    visualColorValue = entry.Value?.ToString();
                     break;
                 default:
                     _logger?.LogWarning($"Ignoring unknown TerrainMistile spawn rule field '{GetYamlKey(entry.Key)}'.");
@@ -376,7 +384,61 @@ internal static class TerrainMistileSpawnRules
             }
         }
 
-        return values;
+        float spawnRadiusMin = fallback.SpawnRadiusMin;
+        float spawnRadiusMax = fallback.SpawnRadiusMax;
+        if (!string.IsNullOrWhiteSpace(spawnRadiusValue) &&
+            !TryParseSpawnRadius(spawnRadiusValue!, out spawnRadiusMin, out spawnRadiusMax))
+        {
+            _logger?.LogWarning($"Ignoring invalid spawnRadius '{spawnRadiusValue}' in TerrainMistile spawn rules. Use a number like '24' or a range like '16~32'.");
+            spawnRadiusMin = fallback.SpawnRadiusMin;
+            spawnRadiusMax = fallback.SpawnRadiusMax;
+        }
+
+        Color visualColor = fallback.VisualColor;
+        if (!string.IsNullOrWhiteSpace(visualColorValue))
+        {
+            if (TryParseVisualColor(visualColorValue!, out Color parsedColor))
+            {
+                visualColor = parsedColor;
+            }
+            else
+            {
+                _logger?.LogWarning($"Ignoring invalid visualColor '{visualColorValue}' in TerrainMistile spawn rules. Use an HTML hex color like '#45FF5A' or '45FF5A'.");
+            }
+        }
+
+        interval = Mathf.Clamp(interval, 0f, 3600f);
+        playerSearchRadius = Mathf.Clamp(playerSearchRadius, 0f, 512f);
+        spawnChance = Mathf.Clamp01(spawnChance);
+        maxDeformationSpawnChanceBonus = Mathf.Clamp01(maxDeformationSpawnChanceBonus);
+        playerBaseValue = Mathf.Clamp(playerBaseValue, 0, 10);
+        baseCheckRadius = Mathf.Clamp(baseCheckRadius, 0f, 128f);
+        maxSpawn = Mathf.Clamp(maxSpawn, 0, 50);
+        spawnRadiusMin = Mathf.Clamp(spawnRadiusMin, 1f, 256f);
+        spawnRadiusMax = Mathf.Clamp(spawnRadiusMax, 1f, 256f);
+        spawnAltitude = Mathf.Clamp(spawnAltitude, 1f, 64f);
+        resetRadius = Mathf.Clamp(resetRadius, 1f, MaximumResetRadius);
+        health = Mathf.Clamp(health, 1f, 10000f);
+        if (spawnRadiusMin > spawnRadiusMax)
+        {
+            (spawnRadiusMin, spawnRadiusMax) = (spawnRadiusMax, spawnRadiusMin);
+        }
+
+        return new TerrainMistileBiomeSpawnRule(
+            interval: interval,
+            playerSearchRadius: playerSearchRadius,
+            spawnChance: spawnChance,
+            maxDeformationSpawnChanceBonus: maxDeformationSpawnChanceBonus,
+            perPlayerSpawn: perPlayerSpawn,
+            playerBaseValue: playerBaseValue,
+            baseCheckRadius: baseCheckRadius,
+            maxSpawn: maxSpawn,
+            spawnRadiusMin: spawnRadiusMin,
+            spawnRadiusMax: spawnRadiusMax,
+            spawnAltitude: spawnAltitude,
+            resetRadius: resetRadius,
+            health: health,
+            visualColor: visualColor);
     }
 
     private static HashSet<string> CreatePlayerBasePrefabNames(object? value)
@@ -531,82 +593,6 @@ internal static class TerrainMistileSpawnRules
 
         return !string.Equals(raw, normalized, StringComparison.Ordinal) &&
                TerrainMistileExpandWorldDataBiomeCompat.TryGetBiome(normalized, out biome);
-    }
-
-    private static TerrainMistileBiomeSpawnRule CreateRule(TerrainMistileSpawnRuleValues? values, TerrainMistileBiomeSpawnRule fallback)
-    {
-        if (values == null)
-        {
-            return fallback;
-        }
-
-        float interval = values.Interval ?? fallback.Interval;
-        float playerSearchRadius = values.PlayerSearchRadius ?? fallback.PlayerSearchRadius;
-        float spawnChance = values.SpawnChance ?? fallback.SpawnChance;
-        float maxDeformationSpawnChanceBonus = values.MaxDeformationSpawnChanceBonus ?? fallback.MaxDeformationSpawnChanceBonus;
-        bool perPlayerSpawn = values.PerPlayerSpawn ?? fallback.PerPlayerSpawn;
-        int playerBaseValue = values.PlayerBaseValue ?? fallback.PlayerBaseValue;
-        float baseCheckRadius = values.BaseCheckRadius ?? fallback.BaseCheckRadius;
-        int maxSpawn = values.MaxSpawn ?? fallback.MaxSpawn;
-        float spawnRadiusMin = fallback.SpawnRadiusMin;
-        float spawnRadiusMax = fallback.SpawnRadiusMax;
-        if (values.SpawnRadius is { } spawnRadiusValue &&
-            !string.IsNullOrWhiteSpace(spawnRadiusValue) &&
-            !TryParseSpawnRadius(spawnRadiusValue, out spawnRadiusMin, out spawnRadiusMax))
-        {
-            _logger?.LogWarning($"Ignoring invalid spawnRadius '{spawnRadiusValue}' in TerrainMistile spawn rules. Use a number like '24' or a range like '16~32'.");
-            spawnRadiusMin = fallback.SpawnRadiusMin;
-            spawnRadiusMax = fallback.SpawnRadiusMax;
-        }
-
-        float spawnAltitude = values.SpawnAltitude ?? fallback.SpawnAltitude;
-        float resetRadius = values.ResetRadius ?? fallback.ResetRadius;
-        float health = values.Health ?? fallback.Health;
-        Color visualColor = fallback.VisualColor;
-        if (values.VisualColor is { } visualColorValue && !string.IsNullOrWhiteSpace(visualColorValue))
-        {
-            if (TryParseVisualColor(visualColorValue, out Color parsedColor))
-            {
-                visualColor = parsedColor;
-            }
-            else
-            {
-                _logger?.LogWarning($"Ignoring invalid visualColor '{visualColorValue}' in TerrainMistile spawn rules. Use an HTML hex color like '#45FF5A' or '45FF5A'.");
-            }
-        }
-
-        interval = Mathf.Clamp(interval, 0f, 3600f);
-        playerSearchRadius = Mathf.Clamp(playerSearchRadius, 0f, 512f);
-        spawnChance = Mathf.Clamp01(spawnChance);
-        maxDeformationSpawnChanceBonus = Mathf.Clamp01(maxDeformationSpawnChanceBonus);
-        playerBaseValue = Mathf.Clamp(playerBaseValue, 0, 10);
-        baseCheckRadius = Mathf.Clamp(baseCheckRadius, 0f, 128f);
-        maxSpawn = Mathf.Clamp(maxSpawn, 0, 50);
-        spawnRadiusMin = Mathf.Clamp(spawnRadiusMin, 1f, 256f);
-        spawnRadiusMax = Mathf.Clamp(spawnRadiusMax, 1f, 256f);
-        spawnAltitude = Mathf.Clamp(spawnAltitude, 1f, 64f);
-        resetRadius = Mathf.Clamp(resetRadius, 1f, MaximumResetRadius);
-        health = Mathf.Clamp(health, 1f, 10000f);
-        if (spawnRadiusMin > spawnRadiusMax)
-        {
-            (spawnRadiusMin, spawnRadiusMax) = (spawnRadiusMax, spawnRadiusMin);
-        }
-
-        return new TerrainMistileBiomeSpawnRule(
-            interval: interval,
-            playerSearchRadius: playerSearchRadius,
-            spawnChance: spawnChance,
-            maxDeformationSpawnChanceBonus: maxDeformationSpawnChanceBonus,
-            perPlayerSpawn: perPlayerSpawn,
-            playerBaseValue: playerBaseValue,
-            baseCheckRadius: baseCheckRadius,
-            maxSpawn: maxSpawn,
-            spawnRadiusMin: spawnRadiusMin,
-            spawnRadiusMax: spawnRadiusMax,
-            spawnAltitude: spawnAltitude,
-            resetRadius: resetRadius,
-            health: health,
-            visualColor: visualColor);
     }
 
     private static void RecalculateRuntimeState()
@@ -834,22 +820,6 @@ internal static class TerrainMistileSpawnRules
         return value.ToString("0.###", CultureInfo.InvariantCulture);
     }
 
-    private sealed class TerrainMistileSpawnRuleValues
-    {
-        public float? Interval { get; set; }
-        public float? PlayerSearchRadius { get; set; }
-        public float? SpawnChance { get; set; }
-        public float? MaxDeformationSpawnChanceBonus { get; set; }
-        public int? MaxSpawn { get; set; }
-        public bool? PerPlayerSpawn { get; set; }
-        public int? PlayerBaseValue { get; set; }
-        public float? BaseCheckRadius { get; set; }
-        public string? SpawnRadius { get; set; }
-        public float? SpawnAltitude { get; set; }
-        public float? ResetRadius { get; set; }
-        public float? Health { get; set; }
-        public string? VisualColor { get; set; }
-    }
 }
 
 internal static class TerrainMistileExpandWorldDataBiomeCompat
