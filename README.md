@@ -23,7 +23,7 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - Successful resets prompt nearby players to check the localized TerrainMistile Compendium entry, at most once every 60 seconds.
 - Reset clears player-style `TerrainComp` height and paint deltas in `resetRadius`.
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.
-- Expand World Data 1.73 blueprint terrain snapshots are protected using their loaded bounds and sample spacing, including when the location's `exteriorRadius` is smaller than its saved terrain.
+- Expand World Data blueprint terrain snapshots are protected using their loaded bounds and sample spacing, including when the location's `exteriorRadius` is smaller than its saved terrain.
 - TerrainMistiles use nonblocking colliders so terrain and pieces do not trap them before impact.
 
 ## TerrainMistileEnforcer

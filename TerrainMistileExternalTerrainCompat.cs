@@ -225,21 +225,18 @@ internal static class TerrainMistileExternalTerrainCompat
         TryPatchBiomeMappingRefreshMethod(
             biomeManagerType,
             "NamesFromFile",
-            Type.EmptyTypes,
             postfix,
             ref _biomeNamesFromFilePatched,
             unavailableMethods);
         TryPatchBiomeMappingRefreshMethod(
             biomeManagerType,
             "SetNames",
-            parameterTypes: null,
             postfix,
             ref _biomeSetNamesPatched,
             unavailableMethods);
         TryPatchBiomeMappingRefreshMethod(
             biomeManagerType,
             "Load",
-            new[] { typeof(string) },
             postfix,
             ref _biomeLoadPatched,
             unavailableMethods);
@@ -263,7 +260,6 @@ internal static class TerrainMistileExternalTerrainCompat
     private static void TryPatchBiomeMappingRefreshMethod(
         Type biomeManagerType,
         string methodName,
-        Type[]? parameterTypes,
         HarmonyMethod postfix,
         ref bool patched,
         List<string> unavailableMethods)
@@ -275,12 +271,10 @@ internal static class TerrainMistileExternalTerrainCompat
 
         try
         {
-            MethodInfo? target = parameterTypes == null
-                ? AccessTools.Method(biomeManagerType, methodName)
-                : AccessTools.Method(biomeManagerType, methodName, parameterTypes);
+            MethodInfo? target = ResolveBiomeMappingRefreshMethod(biomeManagerType, methodName);
             if (target == null)
             {
-                unavailableMethods.Add(methodName);
+                unavailableMethods.Add($"{methodName} (missing or unsupported signature)");
                 return;
             }
 
@@ -291,6 +285,50 @@ internal static class TerrainMistileExternalTerrainCompat
         {
             unavailableMethods.Add($"{methodName} ({ex.Message})");
         }
+    }
+
+    internal static MethodInfo? ResolveBiomeMappingRefreshMethod(Type biomeManagerType, string methodName)
+    {
+        Type? biomeYamlType = methodName == "Load"
+            ? biomeManagerType.Assembly.GetType("ExpandWorldData.BiomeYaml")
+            : null;
+        Type? biomeListType = biomeYamlType == null ? null : typeof(List<>).MakeGenericType(biomeYamlType);
+        MethodInfo? target = null;
+        foreach (MethodInfo method in biomeManagerType.GetMethods(
+                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (method.Name != methodName || method.ReturnType != typeof(void) || method.ContainsGenericParameters)
+            {
+                continue;
+            }
+
+            ParameterInfo[] parameters = method.GetParameters();
+            // Only the reviewed data-loading contracts signal completed mapping changes.
+            // In particular, the parameterless Load is initialization, not a data load.
+            bool supported = methodName switch
+            {
+                "NamesFromFile" => parameters.Length == 0,
+                "SetNames" => parameters.Length == 1 &&
+                              parameters[0].ParameterType == typeof(Dictionary<Heightmap.Biome, string>),
+                "Load" => parameters.Length == 1 &&
+                          (parameters[0].ParameterType == typeof(string) ||
+                           parameters[0].ParameterType == biomeListType),
+                _ => false
+            };
+            if (!supported)
+            {
+                continue;
+            }
+
+            if (target != null)
+            {
+                throw new AmbiguousMatchException($"Multiple supported {biomeManagerType.FullName}.{methodName} methods.");
+            }
+
+            target = method;
+        }
+
+        return target;
     }
 
     private static void BiomeMappingChangedPostfix()
