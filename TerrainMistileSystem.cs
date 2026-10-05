@@ -310,9 +310,24 @@ internal static class TerrainMistileSystem
         ModifiedTerrainCellsByComp.Clear();
         PlayerBasePiecesByBucket.Clear();
         PlayerBaseZoneReadinessByKey.Clear();
+        InvalidatePlayerBaseCache();
+    }
+
+    private static void InvalidatePlayerBaseCache()
+    {
         _playerBasePieceBucketsBuilt = false;
         _nextPlayerBasePieceBucketRefreshTime = 0f;
         _playerBaseZoneReadinessFrame = -1;
+    }
+
+    internal static void NotifyPlayerBasePieceChanged(Piece piece)
+    {
+        // Coalesce load/unload batches; rebuild only when a protection check needs the pieces.
+        if ((_playerBasePieceBucketsBuilt || _playerBaseZoneReadinessFrame >= 0) &&
+            piece && TerrainMistileSpawnRules.IsPlayerBasePrefabName(GetStablePrefabName(piece.gameObject)))
+        {
+            InvalidatePlayerBaseCache();
+        }
     }
 
     internal static void ClearWorldState()
@@ -777,6 +792,28 @@ internal static class TerrainMistileSystem
             return false;
         }
 
+        return PassesPlayerBaseProtection(point, rule, ignorePlayerBaseProtection) &&
+               !IsTargetSuppressedWithoutCleanup(point);
+    }
+
+    internal static bool CanResetTerrainAt(Vector3 point, bool ignorePlayerBaseProtection)
+    {
+        if (ignorePlayerBaseProtection)
+        {
+            return true;
+        }
+
+        // Impact must not trust a snapshot from before a zone transition or creator update.
+        InvalidatePlayerBaseCache();
+        int biome = TerrainMistileSpawnRules.GetBiomeKey(point);
+        return PassesPlayerBaseProtection(point, TerrainMistileSpawnRules.GetRule(biome), false);
+    }
+
+    private static bool PassesPlayerBaseProtection(
+        Vector3 point,
+        TerrainMistileBiomeSpawnRule rule,
+        bool ignorePlayerBaseProtection)
+    {
         bool playerBaseAreaReady = true;
         bool ignoredByPlayerBase = false;
         if (!ignorePlayerBaseProtection)
@@ -787,15 +824,10 @@ internal static class TerrainMistileSystem
                 IsIgnoredByPlayerBase(point, rule);
         }
 
-        if (!TerrainTargetPolicy.PassesPlayerBaseProtection(
-                ignorePlayerBaseProtection,
-                playerBaseAreaReady,
-                ignoredByPlayerBase))
-        {
-            return false;
-        }
-
-        return !IsTargetSuppressedWithoutCleanup(point);
+        return TerrainTargetPolicy.PassesPlayerBaseProtection(
+            ignorePlayerBaseProtection,
+            playerBaseAreaReady,
+            ignoredByPlayerBase);
     }
 
     private static bool IsPlayerBaseAreaReady(Vector3 point, TerrainMistileBiomeSpawnRule rule)

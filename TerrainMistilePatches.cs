@@ -4,6 +4,31 @@ using UnityEngine;
 
 namespace TerrainMistile;
 
+[HarmonyPatch(typeof(Piece))]
+internal static class PlayerBasePieceLifecyclePatch
+{
+    [HarmonyPatch("Awake")]
+    [HarmonyPostfix]
+    private static void AwakePostfix(Piece __instance)
+    {
+        TerrainMistileSystem.NotifyPlayerBasePieceChanged(__instance);
+    }
+
+    [HarmonyPatch("OnDestroy")]
+    [HarmonyPostfix]
+    private static void OnDestroyPostfix(Piece __instance)
+    {
+        TerrainMistileSystem.NotifyPlayerBasePieceChanged(__instance);
+    }
+
+    [HarmonyPatch(nameof(Piece.SetCreator))]
+    [HarmonyPostfix]
+    private static void SetCreatorPostfix(Piece __instance)
+    {
+        TerrainMistileSystem.NotifyPlayerBasePieceChanged(__instance);
+    }
+}
+
 [HarmonyPatch(
     typeof(ZoneSystem),
     "SpawnLocation",

@@ -20,6 +20,7 @@ TerrainMistile spawn chance, interval, visual color, health, and reset radius ca
 - TerrainMistiles target changed terrain points, not players.
 - A TerrainMistile reset happens when it reaches terrain impact or uses its self-destruct attack.
 - Killing a TerrainMistile before self-destruct does not reset terrain.
+- Normal TerrainMistiles recheck base protection before resetting; protected targets or targets with nearby base zones still loading are discarded without a reset. Enforcers bypass this check.
 - Successful resets prompt nearby players to check the localized TerrainMistile Compendium entry, at most once every 60 seconds.
 - Reset clears player-style `TerrainComp` height and paint deltas in `resetRadius`.
 - Location and world baseline terrain are preserved, so location terrain changes can remain after reset.

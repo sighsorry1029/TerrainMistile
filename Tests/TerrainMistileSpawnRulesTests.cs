@@ -70,6 +70,10 @@ public sealed class TerrainMistileSpawnRulesTests
     [DataRow(false, true, false, true)]
     [DataRow(false, false, false, false)]
     [DataRow(false, true, true, false)]
+    [DataRow(false, false, true, false)]
+    [DataRow(true, true, false, true)]
+    [DataRow(true, true, true, true)]
+    [DataRow(true, false, false, true)]
     [DataRow(true, false, true, true)]
     public void EnforcerTargetPolicyBypassesPlayerBase(
         bool ignorePlayerBaseProtection,

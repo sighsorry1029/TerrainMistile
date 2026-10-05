@@ -39,6 +39,26 @@ public sealed class TerrainMistileGameContractTests
     }
 
     [TestMethod]
+    public void PlayerBasePieceLifecyclePatchTargetsRetainExpectedContracts()
+    {
+        foreach (string name in new[] { "Awake", "OnDestroy" })
+        {
+            MethodInfo? method = typeof(Piece).GetMethod(name, Members, null, Type.EmptyTypes, null);
+            Assert.IsNotNull(method);
+            Assert.IsTrue(method.IsPrivate);
+            Assert.AreEqual(typeof(void), method.ReturnType);
+        }
+
+        MethodInfo[] creatorMethods = typeof(Piece).GetMethods(Members)
+            .Where(method => method.Name == nameof(Piece.SetCreator)).ToArray();
+        Assert.HasCount(1, creatorMethods, "The name-based Harmony patch must remain unambiguous.");
+        Assert.IsTrue(creatorMethods[0].IsPublic);
+        Assert.AreEqual(typeof(void), creatorMethods[0].ReturnType);
+        CollectionAssert.AreEqual(new[] { "System.Int64", "Splatform.PlatformUserID" },
+            creatorMethods[0].GetParameters().Select(parameter => parameter.ParameterType.FullName).ToArray());
+    }
+
+    [TestMethod]
     public void LocalizationBackingFieldsAndLanguageHooksResolveOnOriginalGame()
     {
         Assert.IsNotNull(typeof(Localization).GetMethod("SetupLanguage", Members, null, new[] { typeof(string) }, null));

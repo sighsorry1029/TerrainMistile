@@ -485,11 +485,13 @@ public class TerrainMistileBehaviour : MonoBehaviour
         {
             TryLoadTerrainTarget();
             Vector3 resetCenter = _hasTerrainTarget ? _terrainTarget : transform.position;
-            if (!TerrainMistileSystem.ResetTerrainAround(resetCenter, _resetRadius, resetPaint: true))
+            bool canReset = TerrainMistileSystem.CanResetTerrainAt(resetCenter, _enforcer);
+            if (canReset && !TerrainMistileSystem.ResetTerrainAround(resetCenter, _resetRadius, resetPaint: true))
             {
                 return false;
             }
 
+            // Protected or incompletely loaded targets finish without a reset, including death/destroy callbacks.
             _terrainResetDone = true;
             ReleaseCurrentTerrainTarget();
             return true;
